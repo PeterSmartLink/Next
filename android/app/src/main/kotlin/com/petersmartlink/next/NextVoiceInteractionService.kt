@@ -22,10 +22,10 @@ class NextVoiceInteractionService : VoiceInteractionService() {
         startActivity(intent)
     }
 
-    override fun onGetSupportedVoiceActions(voiceActions: MutableSet<String>): MutableSet<String> {
+    override fun onGetSupportedVoiceActions(voiceActions: Set<String>): Set<String> {
         // Extended platform actions are enabled only when Next implements them
         // end-to-end. Returning an empty set prevents false capability claims.
-        return mutableSetOf()
+        return emptySet()
     }
 
     override fun onPrepareToShowSession(args: Bundle, flags: Int) {
