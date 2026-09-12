@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/network/next_owner_api.dart';
 import '../../core/platform/next_platform_bridge.dart';
+import '../../core/security/owner_biometric.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -29,9 +30,11 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _checkingAssistant = true;
   bool _pulseLoading = true;
   bool _chatBusy = false;
+  bool _approvalBusy = false;
   String _pulseError = '';
   String? _conversationId;
   Map<String, dynamic>? _report;
+  Map<String, dynamic>? _pendingAction;
 
   @override
   void initState() {
@@ -94,9 +97,56 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _send([String? suggested]) async {
+  bool _isApprovalIntent(String text) {
+    return RegExp(
+      r'^(approve|approve it|yes approve|yes, approve|go ahead|send it|post it|publish it|do it)$',
+      caseSensitive: false,
+    ).hasMatch(text.trim());
+  }
+
+  bool _isCancellationIntent(String text) {
+    return RegExp(
+      r"^(cancel|cancel it|don't send it|do not send it|don't post it|do not post it)$",
+      caseSensitive: false,
+    ).hasMatch(text.trim());
+  }
+
+  Future<void> _approvePending() async {
+    if (_pendingAction == null || _approvalBusy || _chatBusy) return;
+    setState(() => _approvalBusy = true);
+    final summary = (_pendingAction?['summary'] ?? 'this owner action').toString();
+    final confirmed = await OwnerBiometric.confirmSensitiveAction(
+      reason: 'Confirm: $summary',
+    );
+    if (!mounted) return;
+    setState(() => _approvalBusy = false);
+    if (!confirmed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Owner confirmation was not completed. Nothing was executed.')),
+      );
+      return;
+    }
+    await _send('approve', confirmedApproval: true);
+  }
+
+  Future<void> _cancelPending() async {
+    if (_pendingAction == null || _chatBusy) return;
+    await _send('cancel it', confirmedApproval: true);
+  }
+
+  Future<void> _send(String? suggested, {bool confirmedApproval = false}) async {
     final text = (suggested ?? _composer.text).trim();
     if (text.isEmpty || _chatBusy) return;
+
+    if (!confirmedApproval && _pendingAction != null && _isApprovalIntent(text)) {
+      await _approvePending();
+      return;
+    }
+    if (!confirmedApproval && _pendingAction != null && _isCancellationIntent(text)) {
+      await _cancelPending();
+      return;
+    }
+
     _composer.clear();
     setState(() {
       _chatBusy = true;
@@ -108,8 +158,20 @@ class _HomeScreenState extends State<HomeScreen> {
       final reply = await widget.api.chat(text, conversationId: _conversationId);
       if (!mounted) return;
       setState(() {
-        _conversationId = reply.conversationId;
+        if (reply.conversationId?.isNotEmpty == true) {
+          _conversationId = reply.conversationId;
+        }
         _messages.add(_ChatMessage.assistant(reply.answer, tool: reply.tool));
+        if (reply.approvalRequired && reply.action != null) {
+          _pendingAction = reply.action;
+        } else if (reply.action != null) {
+          final status = reply.action?['status']?.toString();
+          if (status == 'completed' || status == 'cancelled' || status == 'failed') {
+            _pendingAction = null;
+          }
+        } else if (confirmedApproval) {
+          _pendingAction = null;
+        }
         _chatBusy = false;
       });
       _scrollToBottom();
@@ -233,6 +295,15 @@ class _HomeScreenState extends State<HomeScreen> {
                   if (_messages.isNotEmpty) ...[
                     const SizedBox(height: 24),
                     for (final message in _messages) _MessageBubble(message: message),
+                    if (_pendingAction != null) ...[
+                      const SizedBox(height: 4),
+                      _ApprovalCard(
+                        action: _pendingAction!,
+                        busy: _approvalBusy || _chatBusy,
+                        onApprove: _approvePending,
+                        onCancel: _cancelPending,
+                      ),
+                    ],
                     if (_chatBusy) const _ThinkingRow(),
                   ],
                 ],
@@ -257,7 +328,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   decoration: const InputDecoration(hintText: 'Talk to Next…'),
                   onChanged: (_) => setState(() {}),
                   onSubmitted: (_) {
-                    if (!_chatBusy) _send();
+                    if (!_chatBusy) _send(null);
                   },
                 ),
               ),
@@ -269,7 +340,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         if (_composer.text.trim().isEmpty) {
                           _voiceNotReady();
                         } else {
-                          _send();
+                          _send(null);
                         }
                       },
                 icon: Icon(_composer.text.trim().isEmpty ? Icons.mic_rounded : Icons.arrow_upward_rounded),
@@ -492,6 +563,77 @@ class _VoiceCard extends StatelessWidget {
                 label: const Text('Make Next my assistant'),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ApprovalCard extends StatelessWidget {
+  const _ApprovalCard({
+    required this.action,
+    required this.busy,
+    required this.onApprove,
+    required this.onCancel,
+  });
+
+  final Map<String, dynamic> action;
+  final bool busy;
+  final Future<void> Function() onApprove;
+  final Future<void> Function() onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final summary = (action['summary'] ?? 'Owner action').toString();
+    final payload = action['payload'] is Map ? Map<String, dynamic>.from(action['payload'] as Map) : const <String, dynamic>{};
+    final subject = payload['subject']?.toString();
+    final text = payload['text']?.toString();
+
+    return Card(
+      color: scheme.secondaryContainer.withValues(alpha: .55),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.verified_user_rounded, color: scheme.primary),
+                const SizedBox(width: 9),
+                const Expanded(child: Text('Owner approval required', style: TextStyle(fontWeight: FontWeight.w800))),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(summary, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            if (subject?.isNotEmpty == true) ...[
+              const SizedBox(height: 10),
+              Text(subject!, style: const TextStyle(fontWeight: FontWeight.w700)),
+            ],
+            if (text?.isNotEmpty == true) ...[
+              const SizedBox(height: 8),
+              Text(text!, maxLines: 8, overflow: TextOverflow.ellipsis, style: const TextStyle(height: 1.45)),
+            ],
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: busy ? null : onCancel,
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: busy ? null : onApprove,
+                    icon: const Icon(Icons.fingerprint_rounded),
+                    label: Text(busy ? 'Checking…' : 'Approve'),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),
