@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -52,6 +53,7 @@ class OwnerAuthService {
   static const _accessKey = 'next_otya_access_token';
   static const _refreshKey = 'next_otya_refresh_token';
   static const _ownerGrantKey = 'next_owner_grant';
+  static const _deviceIdKey = 'next_owner_device_id';
 
   final Dio _dio;
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
@@ -59,11 +61,13 @@ class OwnerAuthService {
   String? _accessToken;
   String? _refreshToken;
   String? _ownerGrant;
+  String? _deviceId;
   bool _loaded = false;
   Future<void>? _loadInFlight;
   Future<String?>? _refreshInFlight;
 
   String? get ownerGrant => _ownerGrant;
+  String? get deviceId => _deviceId;
 
   Future<void> initialize() => _ensureLoaded();
 
@@ -85,7 +89,19 @@ class OwnerAuthService {
     _accessToken = await _storage.read(key: _accessKey);
     _refreshToken = await _storage.read(key: _refreshKey);
     _ownerGrant = await _storage.read(key: _ownerGrantKey);
+    _deviceId = await _storage.read(key: _deviceIdKey);
+    if (_deviceId == null || _deviceId!.length < 20) {
+      _deviceId = _newDeviceId();
+      await _storage.write(key: _deviceIdKey, value: _deviceId);
+    }
     _loaded = true;
+  }
+
+  String _newDeviceId() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(24, (_) => random.nextInt(256));
+    final encoded = base64UrlEncode(bytes).replaceAll('=', '');
+    return 'next-$encoded';
   }
 
   bool _tokenExpired(String token) {
@@ -106,7 +122,13 @@ class OwnerAuthService {
   }
 
   Future<bool> hasSignedInSession() async {
-    return await getValidAccessToken() != null;
+    await _ensureLoaded();
+    final token = await getValidAccessToken();
+    if (token != null) return true;
+    // A temporary network failure is not a logout. If the securely stored
+    // refresh token still exists, open Next in offline/degraded mode and let
+    // the normal refresh path recover automatically when connectivity returns.
+    return _refreshToken != null && _refreshToken!.isNotEmpty;
   }
 
   Future<String?> getValidAccessToken() async {
@@ -212,7 +234,7 @@ class OwnerAuthService {
   Future<Map<String, String>> _bearerHeaders() async {
     final token = await getValidAccessToken();
     if (token == null) {
-      throw const OwnerAuthException('Sign in to your OTYA account first.');
+      throw const OwnerAuthException('Your OTYA session is temporarily unavailable.');
     }
     return {
       'Authorization': 'Bearer $token',
@@ -221,17 +243,27 @@ class OwnerAuthService {
     };
   }
 
+  Future<Map<String, String>> _deviceHeaders() async {
+    await _ensureLoaded();
+    final id = _deviceId;
+    if (id == null || id.length < 20) {
+      throw const OwnerAuthException('Next could not establish this device identity.');
+    }
+    return {'X-OTYA-Device-ID': id};
+  }
+
   Future<Map<String, String>> ownerHeaders() async {
     await _ensureLoaded();
     final grant = _ownerGrant;
     if (grant == null || grant.isEmpty) {
       throw const OwnerAuthException(
-        'Owner verification is required.',
+        'Owner device verification is required.',
         code: 'OWNER_REQUIRED',
       );
     }
     return {
       ...await _bearerHeaders(),
+      ...await _deviceHeaders(),
       'X-OTYA-Owner-Grant': grant,
     };
   }
@@ -242,7 +274,7 @@ class OwnerAuthService {
       data: const <String, dynamic>{},
       options: Options(headers: await _bearerHeaders()),
     );
-    _requireOk(response, fallback: 'Could not start owner verification.');
+    _requireOk(response, fallback: 'Could not start owner device enrollment.');
   }
 
   Future<void> verifyOwnerOtp(String otp) async {
@@ -278,7 +310,10 @@ class OwnerAuthService {
     final response = await _dio.post<dynamic>(
       '/auth/admin/mobile-grant',
       data: const <String, dynamic>{},
-      options: Options(headers: await _bearerHeaders()),
+      options: Options(headers: {
+        ...await _bearerHeaders(),
+        ...await _deviceHeaders(),
+      }),
     );
     final data = _map(response.data);
     if (!_successful(response, data)) {
@@ -289,7 +324,7 @@ class OwnerAuthService {
     }
     final grant = data?['owner_grant'];
     if (grant is! String || grant.isEmpty) {
-      throw const OwnerAuthException('OTYA did not return an owner grant.');
+      throw const OwnerAuthException('OTYA did not return a trusted-device grant.');
     }
     _ownerGrant = grant;
     await _storage.write(key: _ownerGrantKey, value: grant);
@@ -308,11 +343,20 @@ class OwnerAuthService {
       if (_successful(response, data)) return true;
       if (response.statusCode == 401 || response.statusCode == 403) {
         await clearOwnerGrant();
+        return false;
       }
+      // Non-auth server errors must not turn into a fake logout.
+      return true;
+    } on DioException {
+      // Keep trusted-device state during temporary connectivity loss.
+      return true;
+    } on OwnerAuthException {
+      // If the account session itself is unavailable, preserve the trusted
+      // device. The refresh path will recover when connectivity returns.
+      return _ownerGrant != null && _ownerGrant!.isNotEmpty;
     } catch (_) {
-      return false;
+      return true;
     }
-    return false;
   }
 
   Future<void> clearOwnerGrant() async {
@@ -325,10 +369,9 @@ class OwnerAuthService {
     final refresh = _refreshToken;
     final access = await getValidAccessToken();
     final grant = _ownerGrant;
+    final device = _deviceId;
 
-    await clearLocalSession();
-
-    if (access != null && grant != null) {
+    if (access != null && grant != null && device != null) {
       try {
         await _dio.post<dynamic>(
           '/auth/admin/revoke-grant',
@@ -336,6 +379,7 @@ class OwnerAuthService {
           options: Options(headers: {
             'Authorization': 'Bearer $access',
             'X-OTYA-Owner-Grant': grant,
+            'X-OTYA-Device-ID': device,
           }),
         );
       } catch (_) {}
@@ -345,6 +389,8 @@ class OwnerAuthService {
         await _dio.post<dynamic>('/auth/logout', data: {'refresh_token': refresh});
       } catch (_) {}
     }
+
+    await clearLocalSession();
   }
 
   Future<void> clearLocalSession() async {
@@ -357,6 +403,8 @@ class OwnerAuthService {
       _storage.delete(key: _refreshKey),
       _storage.delete(key: _ownerGrantKey),
     ]);
+    // Keep the stable private device identity across logout. It is useless on
+    // its own because the server-side owner grant is revoked during logout.
   }
 
   Map<String, dynamic>? _map(dynamic value) {
