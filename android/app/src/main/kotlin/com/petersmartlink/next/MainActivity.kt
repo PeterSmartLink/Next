@@ -3,8 +3,8 @@ package com.petersmartlink.next
 import android.app.role.RoleManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
-import android.os.Bundle
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -33,6 +33,14 @@ class MainActivity : FlutterFragmentActivity() {
                             openApp(packageName, result)
                         }
                     }
+                    "openUrl" -> {
+                        val url = call.argument<String>("url")
+                        if (url.isNullOrBlank()) {
+                            result.error("bad_request", "url is required", null)
+                        } else {
+                            openUrl(url, result)
+                        }
+                    }
                     "deviceSnapshot" -> result.success(deviceSnapshot())
                     else -> result.notImplemented()
                 }
@@ -59,7 +67,6 @@ class MainActivity : FlutterFragmentActivity() {
             return
         }
 
-        // Older Android versions can still expose the system assistant chooser.
         runCatching {
             startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
         }
@@ -73,6 +80,24 @@ class MainActivity : FlutterFragmentActivity() {
         }
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         startActivity(launchIntent)
+        result.success(null)
+    }
+
+    private fun openUrl(rawUrl: String, result: MethodChannel.Result) {
+        val uri = runCatching { Uri.parse(rawUrl) }.getOrNull()
+        val scheme = uri?.scheme?.lowercase()
+        if (uri == null || (scheme != "https" && scheme != "http")) {
+            result.error("blocked_url", "Only verified web links can be opened from this bridge.", null)
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
+        }
+        if (intent.resolveActivity(packageManager) == null) {
+            result.error("not_found", "No app can open this link.", null)
+            return
+        }
+        startActivity(intent)
         result.success(null)
     }
 
