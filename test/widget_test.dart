@@ -5,7 +5,7 @@ import 'package:next/app/next_app.dart';
 import 'package:next/features/auth/owner_gate.dart';
 
 void main() {
-  testWidgets('Next opens through the secure owner gate', (tester) async {
+  testWidgets('Next opens through trusted owner-device gate', (tester) async {
     await tester.pumpWidget(const ProviderScope(child: NextApp()));
 
     expect(find.byType(OwnerGate), findsOneWidget);
@@ -13,7 +13,7 @@ void main() {
 
     await tester.pump(const Duration(milliseconds: 150));
     expect(
-      find.text('Sign in to OTYA').evaluate().isNotEmpty ||
+      find.text('Sign in once').evaluate().isNotEmpty ||
           find.text('Opening Next…').evaluate().isNotEmpty,
       isTrue,
     );
