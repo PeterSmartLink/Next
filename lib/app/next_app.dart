@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../features/home/home_screen.dart';
+import '../features/auth/owner_gate.dart';
 
 class NextApp extends ConsumerWidget {
   const NextApp({super.key});
@@ -14,7 +14,7 @@ class NextApp extends ConsumerWidget {
       themeMode: ThemeMode.system,
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),
-      home: const HomeScreen(),
+      home: const OwnerGate(),
     );
   }
 
@@ -40,6 +40,18 @@ class NextApp extends ConsumerWidget {
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(22),
           borderSide: BorderSide.none,
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          minimumSize: const Size.fromHeight(50),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(17)),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size.fromHeight(50),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(17)),
         ),
       ),
     );
