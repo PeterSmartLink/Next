@@ -105,7 +105,9 @@ class NextRecognitionService : RecognitionService() {
             }
 
             override fun onEvent(eventType: Int, params: Bundle?) {
-                callback.event(eventType, params ?: Bundle())
+                // RecognitionService.Callback has no generic event() surface.
+                // Ignore provider-specific events rather than inventing a
+                // capability Android does not expose to recognition services.
             }
         }
     }
