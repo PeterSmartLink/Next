@@ -255,6 +255,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   maxLines: 5,
                   textInputAction: TextInputAction.newline,
                   decoration: const InputDecoration(hintText: 'Talk to Next…'),
+                  onChanged: (_) => setState(() {}),
                   onSubmitted: (_) {
                     if (!_chatBusy) _send();
                   },
@@ -438,7 +439,7 @@ class _Metric extends StatelessWidget {
         color: scheme.surfaceContainerHighest.withValues(alpha: .65),
         borderRadius: BorderRadius.circular(14),
       ),
-      child: Text('$label  $value', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w650)),
+      child: Text('$label  $value', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
     );
   }
 }
