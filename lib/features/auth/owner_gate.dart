@@ -463,7 +463,7 @@ class _Panel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(title, style: const TextStyle(fontSize: 23, fontWeight: FontWeight.w850, letterSpacing: -.6)),
+            Text(title, style: const TextStyle(fontSize: 23, fontWeight: FontWeight.w800, letterSpacing: -.6)),
             const SizedBox(height: 8),
             Text(subtitle, style: TextStyle(color: scheme.onSurfaceVariant, height: 1.45)),
             const SizedBox(height: 22),
