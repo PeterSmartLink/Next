@@ -63,7 +63,10 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
         return;
       }
       final ownerReady = await _auth.hasValidOwnerGrant();
-      _setStage(ownerReady ? _OwnerStage.ready : _OwnerStage.ownerStart);
+      _setStage(
+        ownerReady ? _OwnerStage.ready : _OwnerStage.ownerStart,
+        notice: ownerReady ? '' : 'Your OTYA account is signed in. Trust this phone once to enable private owner controls.',
+      );
     } catch (_) {
       _setStage(_OwnerStage.signIn);
     }
@@ -96,7 +99,10 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
     if (result.ok) {
       _password.clear();
       _secondFactor.clear();
-      _setStage(_OwnerStage.ownerStart, notice: 'Signed in to your OTYA account.');
+      _setStage(
+        _OwnerStage.ownerStart,
+        notice: 'Signed in. This is the last setup step for this phone.',
+      );
       return;
     }
     setState(() {
@@ -119,12 +125,12 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
       await _auth.startOwnerVerification();
       _setStage(
         _OwnerStage.ownerOtp,
-        notice: 'A single-use owner code was sent to your verified OTYA email.',
+        notice: 'A one-time device enrollment code was sent to your verified OTYA email.',
       );
     } on OwnerAuthException catch (e) {
       _showError(e.message);
     } catch (_) {
-      _showError('Owner verification could not start. Try again.');
+      _showError('Trusted-phone enrollment could not start. Try again.');
     }
   }
 
@@ -144,7 +150,7 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
         _stage = _OwnerStage.ownerTelegram;
         _busy = true;
         _telegramLaunchStarted = true;
-        _notice = 'Email verified. Finish the linked Telegram check, then return to Next.';
+        _notice = 'Email confirmed. Verify your linked Telegram identity once, then return to Next.';
       });
       await _auth.startTelegramOwnerVerification();
       if (mounted) setState(() => _busy = false);
@@ -180,7 +186,10 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
     });
     try {
       await _auth.completeOwnerVerification();
-      _setStage(_OwnerStage.ready, notice: 'Owner mode unlocked.');
+      _setStage(
+        _OwnerStage.ready,
+        notice: 'This phone is now trusted. Normal Next launches will open directly.',
+      );
     } on OwnerAuthException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -191,7 +200,7 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        if (!silent) _error = 'Owner verification could not be completed.';
+        if (!silent) _error = 'Trusted-phone enrollment could not be completed.';
       });
     }
   }
@@ -218,10 +227,19 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
   }
 
   Future<void> _ownerExpired() async {
+    final signedIn = await _auth.hasSignedInSession();
+    if (!mounted) return;
+    if (!signedIn) {
+      _setStage(
+        _OwnerStage.signIn,
+        notice: 'Your OTYA account session was revoked or expired. Sign in again to restore Next.',
+      );
+      return;
+    }
     await _auth.clearOwnerGrant();
     _setStage(
       _OwnerStage.ownerStart,
-      notice: 'Owner verification expired. Unlock Next again to continue.',
+      notice: 'This phone is no longer trusted for owner controls. Re-verify it to continue.',
     );
   }
 
@@ -274,14 +292,15 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
 
   Widget _buildSignIn() {
     return _Panel(
-      title: 'Sign in to OTYA',
-      subtitle: 'Next uses your existing OTYA identity. There is no separate owner account.',
+      title: 'Sign in once',
+      subtitle:
+          'Use your existing OTYA account on this phone. After the one-time owner enrollment, Next keeps this device signed in until you revoke it or replace it.',
       children: [
         TextField(
           controller: _email,
           keyboardType: TextInputType.emailAddress,
           autofillHints: const [AutofillHints.username, AutofillHints.email],
-          decoration: const InputDecoration(labelText: 'Email'),
+          decoration: const InputDecoration(labelText: 'OTYA email'),
           textInputAction: TextInputAction.next,
         ),
         const SizedBox(height: 12),
@@ -326,14 +345,18 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
 
   Widget _buildOwnerStart() {
     return _Panel(
-      title: 'Unlock owner mode',
+      title: 'Trust this phone',
       subtitle:
-          'For company controls, Next requires fresh owner verification. We will verify your OTYA email and linked Telegram identity.',
+          'This is a one-time security ceremony for a new owner phone: verify your OTYA email, then your linked Telegram identity. After that, normal launches open straight into live voice.',
       children: [
+        const _EnrollmentStep(number: '1', text: 'OTYA account signed in'),
+        const _EnrollmentStep(number: '2', text: 'Confirm email code'),
+        const _EnrollmentStep(number: '3', text: 'Confirm linked Telegram identity'),
+        const SizedBox(height: 16),
         FilledButton.icon(
           onPressed: _busy ? null : _startOwnerUnlock,
-          icon: const Icon(Icons.verified_user_outlined),
-          label: Text(_busy ? 'Starting…' : 'Unlock Next'),
+          icon: const Icon(Icons.phonelink_lock_rounded),
+          label: Text(_busy ? 'Starting…' : 'Trust this phone'),
         ),
         const SizedBox(height: 8),
         TextButton(onPressed: _busy ? null : _signOut, child: const Text('Sign out')),
@@ -344,20 +367,21 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
   Widget _buildOtp() {
     return _Panel(
       title: 'Check your email',
-      subtitle: 'Enter the five-character owner verification code. It expires quickly and is never stored by Next.',
+      subtitle:
+          'Enter the five-character device enrollment code. It expires quickly and is never stored by Next.',
       children: [
         TextField(
           controller: _otp,
           autofocus: true,
           textCapitalization: TextCapitalization.characters,
           maxLength: 5,
-          decoration: const InputDecoration(labelText: 'Owner verification code', counterText: ''),
+          decoration: const InputDecoration(labelText: 'Device enrollment code', counterText: ''),
           onSubmitted: (_) => _verifyOtpAndOpenTelegram(),
         ),
         const SizedBox(height: 16),
         FilledButton(
           onPressed: _busy ? null : _verifyOtpAndOpenTelegram,
-          child: Text(_busy ? 'Checking…' : 'Continue with Telegram'),
+          child: Text(_busy ? 'Checking…' : 'Confirm and open Telegram'),
         ),
         TextButton(
           onPressed: _busy ? null : _startOwnerUnlock,
@@ -369,22 +393,52 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
 
   Widget _buildTelegram() {
     return _Panel(
-      title: 'Confirm with Telegram',
+      title: 'Confirm your identity',
       subtitle:
-          'Use the Telegram identity already linked to this OTYA account. After Telegram finishes, return to Next and we will complete owner unlock automatically.',
+          'Finish the linked Telegram check and return to Next. This is for trusted-phone enrollment, not something you repeat every time you open the app.',
       children: [
         FilledButton.icon(
           onPressed: _busy ? null : () => _completeTelegram(),
           icon: const Icon(Icons.check_circle_outline_rounded),
-          label: Text(_busy ? 'Checking…' : 'I completed Telegram verification'),
+          label: Text(_busy ? 'Checking…' : 'I confirmed in Telegram'),
         ),
         const SizedBox(height: 8),
         OutlinedButton.icon(
           onPressed: _busy ? null : _openTelegramAgain,
           icon: const Icon(Icons.open_in_new_rounded),
-          label: const Text('Open Telegram verification again'),
+          label: const Text('Open Telegram again'),
         ),
       ],
+    );
+  }
+}
+
+class _EnrollmentStep extends StatelessWidget {
+  const _EnrollmentStep({required this.number, required this.text});
+  final String number;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        children: [
+          Container(
+            width: 25,
+            height: 25,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: scheme.primaryContainer,
+            ),
+            child: Text(number, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text, style: const TextStyle(fontSize: 13))),
+        ],
+      ),
     );
   }
 }
