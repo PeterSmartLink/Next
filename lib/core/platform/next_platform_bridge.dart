@@ -21,6 +21,10 @@ class NextPlatformBridge {
     await _channel.invokeMethod<void>('openApp', {'packageName': packageName});
   }
 
+  static Future<void> openUrl(String url) async {
+    await _channel.invokeMethod<void>('openUrl', {'url': url});
+  }
+
   static Future<Map<String, dynamic>> deviceSnapshot() async {
     final raw = await _channel.invokeMapMethod<String, dynamic>('deviceSnapshot');
     return raw ?? const <String, dynamic>{};
