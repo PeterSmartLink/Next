@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 
 import '../../core/network/next_owner_api.dart';
@@ -20,10 +24,10 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  final _composer = TextEditingController();
-  final _scroll = ScrollController();
-  final List<_ChatMessage> _messages = [];
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  StreamSubscription<Map<String, dynamic>>? _voiceSubscription;
+  Timer? _listenRestart;
+  Timer? _pulseTimer;
 
   bool _assistantAvailable = false;
   bool _assistantHeld = false;
@@ -31,23 +35,130 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _pulseLoading = true;
   bool _chatBusy = false;
   bool _approvalBusy = false;
+  bool _listening = false;
+  bool _speaking = false;
+  bool _autoVoice = true;
+  double _voiceLevel = 0;
+
+  String _voiceState = 'opening';
+  String _heard = '';
+  String _nextText = 'Opening your private OTYA intelligence…';
+  String _hudError = '';
   String _pulseError = '';
   String? _conversationId;
   Map<String, dynamic>? _report;
   Map<String, dynamic>? _pendingAction;
+  final List<_HudEvent> _events = [];
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _subscribeToVoice();
     _refreshAssistantState();
     _loadPulse();
+    _pulseTimer = Timer.periodic(const Duration(minutes: 2), (_) => _loadPulse(silent: true));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future<void>.delayed(const Duration(milliseconds: 700), _startListening);
+    });
   }
 
   @override
   void dispose() {
-    _composer.dispose();
-    _scroll.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _voiceSubscription?.cancel();
+    _listenRestart?.cancel();
+    _pulseTimer?.cancel();
+    unawaited(NextPlatformBridge.stopVoiceListening());
+    unawaited(NextPlatformBridge.stopSpeaking());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _autoVoice && !_chatBusy && !_speaking) {
+      _scheduleListen(const Duration(milliseconds: 500));
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _listenRestart?.cancel();
+      unawaited(NextPlatformBridge.stopVoiceListening());
+    }
+  }
+
+  void _subscribeToVoice() {
+    _voiceSubscription = NextPlatformBridge.voiceEvents.listen(
+      _handleVoiceEvent,
+      onError: (Object error) {
+        if (!mounted) return;
+        setState(() {
+          _voiceState = 'voice unavailable';
+          _hudError = 'The phone voice service is temporarily unavailable.';
+          _listening = false;
+        });
+      },
+    );
+  }
+
+  void _handleVoiceEvent(Map<String, dynamic> event) {
+    if (!mounted) return;
+    final type = event['type']?.toString() ?? '';
+
+    switch (type) {
+      case 'state':
+        final state = event['state']?.toString() ?? 'idle';
+        setState(() {
+          _voiceState = state;
+          _listening = state == 'listening' || state == 'hearing';
+          _speaking = state == 'speaking';
+          if (state == 'listening') _hudError = '';
+        });
+      case 'level':
+        final value = event['value'];
+        if (value is num) setState(() => _voiceLevel = value.toDouble().clamp(0, 1));
+      case 'partial':
+        final text = event['text']?.toString().trim() ?? '';
+        if (text.isNotEmpty) {
+          setState(() {
+            _heard = text;
+            _voiceState = 'hearing';
+            _listening = true;
+          });
+        }
+      case 'final':
+        final text = event['text']?.toString().trim() ?? '';
+        if (text.isNotEmpty) {
+          setState(() {
+            _heard = text;
+            _listening = false;
+            _voiceState = 'thinking';
+          });
+          unawaited(_handleUtterance(text));
+        }
+      case 'silence':
+        setState(() {
+          _listening = false;
+          _voiceLevel = 0;
+          if (!_chatBusy && !_speaking) _voiceState = 'idle';
+        });
+        _scheduleListen(const Duration(milliseconds: 650));
+      case 'tts_done':
+        setState(() {
+          _speaking = false;
+          _voiceState = 'idle';
+          _voiceLevel = 0;
+        });
+        _scheduleListen(const Duration(milliseconds: 350));
+      case 'error':
+        final message = event['message']?.toString().trim();
+        setState(() {
+          _listening = false;
+          _voiceLevel = 0;
+          _voiceState = 'attention';
+          _hudError = message?.isNotEmpty == true ? message! : 'Voice stopped unexpectedly.';
+        });
+        _pushEvent(_hudError, severity: _HudSeverity.warning);
+      default:
+        break;
+    }
   }
 
   Future<void> _refreshAssistantState() async {
@@ -67,13 +178,19 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _requestAssistantRole() async {
-    await NextPlatformBridge.requestAssistantRole();
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-    await _refreshAssistantState();
+    try {
+      await NextPlatformBridge.requestAssistantRole();
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      await _refreshAssistantState();
+    } catch (_) {
+      if (mounted) {
+        setState(() => _hudError = 'Android could not open the assistant selector.');
+      }
+    }
   }
 
-  Future<void> _loadPulse() async {
-    if (mounted) {
+  Future<void> _loadPulse({bool silent = false}) async {
+    if (!silent && mounted) {
       setState(() {
         _pulseLoading = true;
         _pulseError = '';
@@ -85,320 +202,320 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _report = report;
         _pulseLoading = false;
+        _pulseError = '';
       });
     } on OwnerAccessExpired {
-      await widget.onOwnerExpired();
-    } catch (e) {
+      await _ownerExpired();
+    } catch (error) {
       if (!mounted) return;
       setState(() {
         _pulseLoading = false;
-        _pulseError = e.toString().replaceFirst('Bad state: ', '');
+        _pulseError = _cleanError(error);
+      });
+      if (!silent) _pushEvent(_pulseError, severity: _HudSeverity.warning);
+    }
+  }
+
+  Future<void> _startListening() async {
+    if (!mounted || !_autoVoice || _chatBusy || _approvalBusy || _speaking || _listening) return;
+    _listenRestart?.cancel();
+    try {
+      await NextPlatformBridge.startVoiceListening();
+      if (!mounted) return;
+      setState(() {
+        _voiceState = 'listening';
+        _listening = true;
+        _hudError = '';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _voiceState = 'tap to talk';
+        _listening = false;
+        _hudError = 'Tap the center to start voice.';
       });
     }
   }
 
+  Future<void> _stopListening() async {
+    _listenRestart?.cancel();
+    try {
+      await NextPlatformBridge.stopVoiceListening();
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _listening = false;
+      _voiceLevel = 0;
+      if (!_chatBusy && !_speaking) _voiceState = 'idle';
+    });
+  }
+
+  void _scheduleListen(Duration delay) {
+    if (!_autoVoice || _chatBusy || _approvalBusy || _speaking || !mounted) return;
+    _listenRestart?.cancel();
+    _listenRestart = Timer(delay, _startListening);
+  }
+
+  Future<void> _toggleVoice() async {
+    if (_speaking) {
+      await NextPlatformBridge.stopSpeaking();
+      if (mounted) setState(() => _speaking = false);
+      await _startListening();
+      return;
+    }
+    if (_listening) {
+      _autoVoice = false;
+      await _stopListening();
+      if (mounted) setState(() => _voiceState = 'paused');
+      return;
+    }
+    setState(() => _autoVoice = true);
+    await _startListening();
+  }
+
   bool _isApprovalIntent(String text) {
     return RegExp(
-      r'^(approve|approve it|yes approve|yes, approve|go ahead|send it|post it|publish it|do it)$',
+      r'^(approve|approve it|yes approve|yes, approve|go ahead|send it|post it|publish it|do it|confirm|confirm it)$',
       caseSensitive: false,
     ).hasMatch(text.trim());
   }
 
   bool _isCancellationIntent(String text) {
     return RegExp(
-      r"^(cancel|cancel it|don't send it|do not send it|don't post it|do not post it)$",
+      r"^(cancel|cancel it|stop|don't send it|do not send it|don't post it|do not post it)$",
       caseSensitive: false,
     ).hasMatch(text.trim());
   }
 
+  Future<void> _handleUtterance(String text) async {
+    if (_pendingAction != null && _isApprovalIntent(text)) {
+      await _approvePending();
+      return;
+    }
+    if (_pendingAction != null && _isCancellationIntent(text)) {
+      await _cancelPending();
+      return;
+    }
+    await _sendToNext(text);
+  }
+
   Future<void> _approvePending() async {
     if (_pendingAction == null || _approvalBusy || _chatBusy) return;
-    setState(() => _approvalBusy = true);
+    await _stopListening();
+    setState(() {
+      _approvalBusy = true;
+      _voiceState = 'confirming';
+    });
     final summary = (_pendingAction?['summary'] ?? 'this owner action').toString();
-    final confirmed = await OwnerBiometric.confirmSensitiveAction(
-      reason: 'Confirm: $summary',
-    );
+    final confirmed = await OwnerBiometric.confirmSensitiveAction(reason: 'Confirm: $summary');
     if (!mounted) return;
     setState(() => _approvalBusy = false);
     if (!confirmed) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Owner confirmation was not completed. Nothing was executed.')),
-      );
+      setState(() {
+        _nextText = 'Nothing was executed.';
+        _voiceState = 'idle';
+      });
+      _pushEvent('Owner confirmation was cancelled.', severity: _HudSeverity.info);
+      _scheduleListen(const Duration(milliseconds: 450));
       return;
     }
-    await _send('approve', confirmedApproval: true);
+    await _sendToNext('approve', confirmedApproval: true);
   }
 
   Future<void> _cancelPending() async {
     if (_pendingAction == null || _chatBusy) return;
-    await _send('cancel it', confirmedApproval: true);
+    await _sendToNext('cancel it', confirmedApproval: true);
   }
 
-  Future<void> _send(String? suggested, {bool confirmedApproval = false}) async {
-    final text = (suggested ?? _composer.text).trim();
-    if (text.isEmpty || _chatBusy) return;
+  Future<void> _sendToNext(String text, {bool confirmedApproval = false}) async {
+    final request = text.trim();
+    if (request.isEmpty || _chatBusy) return;
+    await _stopListening();
+    if (!mounted) return;
 
-    if (!confirmedApproval && _pendingAction != null && _isApprovalIntent(text)) {
-      await _approvePending();
-      return;
-    }
-    if (!confirmedApproval && _pendingAction != null && _isCancellationIntent(text)) {
-      await _cancelPending();
-      return;
-    }
-
-    _composer.clear();
     setState(() {
       _chatBusy = true;
-      _messages.add(_ChatMessage.user(text));
+      _voiceState = 'thinking';
+      _hudError = '';
+      _heard = confirmedApproval ? _heard : request;
+      _nextText = '…';
     });
-    _scrollToBottom();
 
     try {
-      final reply = await widget.api.chat(text, conversationId: _conversationId);
+      final reply = await widget.api.chat(request, conversationId: _conversationId);
       if (!mounted) return;
       setState(() {
-        if (reply.conversationId?.isNotEmpty == true) {
-          _conversationId = reply.conversationId;
-        }
-        _messages.add(_ChatMessage.assistant(reply.answer, tool: reply.tool));
+        if (reply.conversationId?.isNotEmpty == true) _conversationId = reply.conversationId;
+        _nextText = reply.answer;
+        _chatBusy = false;
         if (reply.approvalRequired && reply.action != null) {
           _pendingAction = reply.action;
+          _voiceState = 'approval needed';
         } else if (reply.action != null) {
           final status = reply.action?['status']?.toString();
           if (status == 'completed' || status == 'cancelled' || status == 'failed') {
             _pendingAction = null;
           }
+          _voiceState = 'speaking';
         } else if (confirmedApproval) {
           _pendingAction = null;
+          _voiceState = 'speaking';
+        } else {
+          _voiceState = 'speaking';
         }
-        _chatBusy = false;
       });
-      _scrollToBottom();
-      if (reply.tool == 'full_report' ||
-          reply.tool == 'system_status' ||
-          reply.tool == 'release_summary' ||
-          reply.tool == 'crash_summary' ||
-          reply.tool == 'support_inbox') {
-        _loadPulse();
+
+      _pushEvent(
+        reply.tool == null ? 'Next answered.' : 'Next used ${reply.tool!.replaceAll('_', ' ')}.',
+        severity: _HudSeverity.info,
+      );
+
+      if (_toolRefreshesPulse(reply.tool)) unawaited(_loadPulse(silent: true));
+
+      try {
+        await NextPlatformBridge.speak(reply.answer);
+        if (mounted) setState(() => _speaking = true);
+      } catch (_) {
+        if (mounted) {
+          setState(() {
+            _speaking = false;
+            _voiceState = reply.approvalRequired ? 'approval needed' : 'idle';
+          });
+        }
+        if (!reply.approvalRequired) _scheduleListen(const Duration(milliseconds: 650));
       }
     } on OwnerAccessExpired {
       if (mounted) setState(() => _chatBusy = false);
-      await widget.onOwnerExpired();
-    } catch (e) {
+      await _ownerExpired();
+    } catch (error) {
       if (!mounted) return;
+      final message = _cleanError(error);
       setState(() {
         _chatBusy = false;
-        _messages.add(_ChatMessage.assistant(
-          'I could not complete that request: ${e.toString().replaceFirst('Bad state: ', '')}',
-        ));
+        _voiceState = 'attention';
+        _hudError = message;
+        _nextText = 'I could not complete that request.';
       });
-      _scrollToBottom();
+      _pushEvent(message, severity: _HudSeverity.error);
+      _scheduleListen(const Duration(seconds: 1));
     }
   }
 
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
-      _scroll.animateTo(
-        _scroll.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 260),
-        curve: Curves.easeOut,
-      );
-    });
+  bool _toolRefreshesPulse(String? tool) {
+    return tool == 'full_report' ||
+        tool == 'system_status' ||
+        tool == 'release_summary' ||
+        tool == 'crash_summary' ||
+        tool == 'support_inbox';
   }
 
-  void _voiceNotReady() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Realtime voice is the next transport being connected. Text and owner actions are live now.'),
-      ),
-    );
+  Future<void> _ownerExpired() async {
+    _autoVoice = false;
+    _listenRestart?.cancel();
+    try {
+      await NextPlatformBridge.stopVoiceListening();
+      await NextPlatformBridge.stopSpeaking();
+    } catch (_) {}
+    await widget.onOwnerExpired();
+  }
+
+  String _cleanError(Object error) {
+    return error.toString().replaceFirst('Bad state: ', '').replaceFirst('Exception: ', '');
+  }
+
+  void _pushEvent(String text, {required _HudSeverity severity}) {
+    if (!mounted || text.trim().isEmpty) return;
+    setState(() {
+      _events.insert(0, _HudEvent(text.trim(), severity));
+      if (_events.length > 4) _events.removeLast();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final pulse = _PulseSnapshot.fromReport(_report, loading: _pulseLoading, error: _pulseError);
+
     return Scaffold(
-      body: SafeArea(
-        child: Column(
-          children: [
-            _Header(
-              busy: _chatBusy || _pulseLoading,
-              onRefresh: _loadPulse,
-              onSignOut: widget.onSignOut,
-            ),
-            Expanded(
-              child: ListView(
-                controller: _scroll,
-                padding: const EdgeInsets.fromLTRB(20, 18, 20, 124),
+      backgroundColor: scheme.surface,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          _CyberBackdrop(
+            active: _listening || _speaking || _chatBusy,
+            level: _voiceLevel,
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+              child: Column(
                 children: [
-                  if (_messages.isEmpty) ...[
-                    const Text(
-                      'Good to see you.',
-                      style: TextStyle(
-                        fontSize: 34,
-                        height: 1.05,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -1.2,
+                  _HudHeader(
+                    state: _voiceState,
+                    pulse: pulse,
+                    busy: _pulseLoading,
+                    onRefresh: () => _loadPulse(),
+                    onAssistant: _requestAssistantRole,
+                    assistantAvailable: _assistantAvailable,
+                    assistantHeld: _assistantHeld,
+                    onSignOut: widget.onSignOut,
+                  ),
+                  Expanded(
+                    child: Center(
+                      child: _VoiceCore(
+                        state: _voiceState,
+                        level: _voiceLevel,
+                        listening: _listening,
+                        speaking: _speaking,
+                        thinking: _chatBusy || _approvalBusy,
+                        onTap: _toggleVoice,
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    Text(
-                      'Talk naturally. Next can inspect OTYA, reason over what it finds, and keep sensitive actions behind owner approval.',
-                      style: TextStyle(color: theme.colorScheme.onSurfaceVariant, height: 1.5),
-                    ),
-                    const SizedBox(height: 26),
-                  ],
-                  _PulseCard(
-                    report: _report,
-                    loading: _pulseLoading,
-                    error: _pulseError,
-                    onRefresh: _loadPulse,
                   ),
-                  const SizedBox(height: 14),
-                  _VoiceCard(
-                    checking: _checkingAssistant,
-                    available: _assistantAvailable,
-                    held: _assistantHeld,
-                    onRequest: _requestAssistantRole,
-                  ),
-                  if (_messages.isEmpty) ...[
-                    const SizedBox(height: 14),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        _PromptChip(
-                          icon: Icons.health_and_safety_outlined,
-                          label: 'How are my systems?',
-                          onPressed: () => _send('Give me a concise current OTYA system report. What needs my attention?'),
+                  if (!_checkingAssistant && _assistantAvailable && !_assistantHeld)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _GlassPanel(
+                        child: Row(
+                          children: [
+                            const Icon(Icons.assistant_outlined, size: 18),
+                            const SizedBox(width: 10),
+                            const Expanded(
+                              child: Text(
+                                'Make Next your phone assistant for faster voice access.',
+                                style: TextStyle(fontSize: 12.5),
+                              ),
+                            ),
+                            TextButton(onPressed: _requestAssistantRole, child: const Text('Enable')),
+                          ],
                         ),
-                        _PromptChip(
-                          icon: Icons.rocket_launch_outlined,
-                          label: 'Check releases',
-                          onPressed: () => _send('Check my recent OTYA releases and tell me if anything needs attention.'),
-                        ),
-                        _PromptChip(
-                          icon: Icons.support_agent_outlined,
-                          label: 'Review support',
-                          onPressed: () => _send('Review recent support and tell me what needs my attention.'),
-                        ),
-                        _PromptChip(
-                          icon: Icons.memory_rounded,
-                          label: 'What are we forgetting?',
-                          onPressed: () => _send('Based on OTYA knowledge and current system state, what important unfinished work are we forgetting?'),
-                        ),
-                      ],
+                      ),
                     ),
-                  ],
-                  if (_messages.isNotEmpty) ...[
-                    const SizedBox(height: 24),
-                    for (final message in _messages) _MessageBubble(message: message),
-                    if (_pendingAction != null) ...[
-                      const SizedBox(height: 4),
-                      _ApprovalCard(
+                  if (_pendingAction != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _ApprovalHud(
                         action: _pendingAction!,
                         busy: _approvalBusy || _chatBusy,
                         onApprove: _approvePending,
                         onCancel: _cancelPending,
                       ),
-                    ],
-                    if (_chatBusy) const _ThinkingRow(),
+                    ),
+                  _LiveTranscriptHud(
+                    heard: _heard,
+                    answer: _nextText,
+                    error: _hudError,
+                    listening: _listening,
+                    speaking: _speaking,
+                    thinking: _chatBusy,
+                  ),
+                  if (_events.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _EventStrip(events: _events),
                   ],
                 ],
               ),
             ),
-          ],
-        ),
-      ),
-      bottomSheet: SafeArea(
-        top: false,
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-          color: theme.scaffoldBackgroundColor,
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _composer,
-                  minLines: 1,
-                  maxLines: 5,
-                  textInputAction: TextInputAction.newline,
-                  decoration: const InputDecoration(hintText: 'Talk to Next…'),
-                  onChanged: (_) => setState(() {}),
-                  onSubmitted: (_) {
-                    if (!_chatBusy) _send(null);
-                  },
-                ),
-              ),
-              const SizedBox(width: 10),
-              IconButton.filled(
-                onPressed: _chatBusy
-                    ? null
-                    : () {
-                        if (_composer.text.trim().isEmpty) {
-                          _voiceNotReady();
-                        } else {
-                          _send(null);
-                        }
-                      },
-                icon: Icon(_composer.text.trim().isEmpty ? Icons.mic_rounded : Icons.arrow_upward_rounded),
-                tooltip: 'Talk or send',
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _Header extends StatelessWidget {
-  const _Header({
-    required this.busy,
-    required this.onRefresh,
-    required this.onSignOut,
-  });
-
-  final bool busy;
-  final Future<void> Function() onRefresh;
-  final Future<void> Function() onSignOut;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 14, 12, 10),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(colors: [theme.colorScheme.primary, theme.colorScheme.tertiary]),
-            ),
-            child: const Icon(Icons.auto_awesome_rounded, color: Colors.white),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Next', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-                Text(busy ? 'Working…' : 'Your private OTYA intelligence', style: const TextStyle(fontSize: 12)),
-              ],
-            ),
-          ),
-          IconButton(onPressed: busy ? null : onRefresh, icon: const Icon(Icons.refresh_rounded), tooltip: 'Refresh Pulse'),
-          PopupMenuButton<String>(
-            onSelected: (value) {
-              if (value == 'signout') onSignOut();
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'signout', child: Text('Sign out')),
-            ],
           ),
         ],
       ),
@@ -406,172 +523,380 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _PulseCard extends StatelessWidget {
-  const _PulseCard({
-    required this.report,
+class _PulseSnapshot {
+  const _PulseSnapshot({
+    required this.label,
+    required this.detail,
+    required this.healthy,
     required this.loading,
-    required this.error,
-    required this.onRefresh,
   });
 
-  final Map<String, dynamic>? report;
+  final String label;
+  final String detail;
+  final bool healthy;
   final bool loading;
-  final String error;
-  final Future<void> Function() onRefresh;
 
-  Map<String, dynamic> _map(dynamic value) => value is Map
-      ? Map<String, dynamic>.from(value)
-      : const <String, dynamic>{};
-
-  List<dynamic> _list(dynamic value) => value is List ? value : const [];
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final status = _map(report?['status']);
-    final plugins = _list(report?['plugins']);
-    final crashes = _list(report?['crashes']);
-    final support = _list(report?['support']);
-    final releases = _list(report?['releases']);
-    final coreHealthy = [status['database'], status['kv'], status['ai']].where((v) => v == true).length;
-    final connected = plugins.where((entry) => entry is Map && entry['status'] == 'connected').length;
-    final latestRelease = releases.isNotEmpty && releases.first is Map
-        ? (releases.first as Map)['tag'] ?? (releases.first as Map)['version']
-        : null;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.radar_rounded, color: theme.colorScheme.primary),
-                const SizedBox(width: 10),
-                const Text('Pulse', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: error.isEmpty ? theme.colorScheme.primaryContainer : theme.colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                  child: Text(
-                    loading ? 'Checking' : error.isEmpty ? 'Live' : 'Unavailable',
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            if (loading)
-              const LinearProgressIndicator()
-            else if (error.isNotEmpty) ...[
-              Text(error, style: TextStyle(color: theme.colorScheme.onSurfaceVariant, height: 1.4)),
-              const SizedBox(height: 10),
-              TextButton.icon(onPressed: onRefresh, icon: const Icon(Icons.refresh), label: const Text('Try again')),
-            ] else ...[
-              Text(
-                coreHealthy == 3 ? 'Core systems are responding.' : '$coreHealthy of 3 core services are ready.',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _Metric(label: 'Connections', value: '$connected/${plugins.length}'),
-                  _Metric(label: 'Crashes', value: '${crashes.length} groups'),
-                  _Metric(label: 'Support', value: '${support.length} recent'),
-                  if (latestRelease != null) _Metric(label: 'Release', value: '$latestRelease'),
-                  if (status['feedback_7d'] != null) _Metric(label: 'Feedback 7d', value: '${status['feedback_7d']}'),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
+  factory _PulseSnapshot.fromReport(
+    Map<String, dynamic>? report, {
+    required bool loading,
+    required String error,
+  }) {
+    if (loading) {
+      return const _PulseSnapshot(label: 'SYNC', detail: 'Checking OTYA', healthy: true, loading: true);
+    }
+    if (error.isNotEmpty) {
+      return const _PulseSnapshot(label: 'LINK', detail: 'Needs attention', healthy: false, loading: false);
+    }
+    final status = report?['status'];
+    final map = status is Map ? Map<String, dynamic>.from(status) : const <String, dynamic>{};
+    final ready = [map['database'], map['kv'], map['ai']].where((value) => value == true).length;
+    final crashes = report?['crashes'];
+    final crashCount = crashes is List ? crashes.length : 0;
+    final healthy = ready == 3;
+    return _PulseSnapshot(
+      label: healthy ? 'LIVE' : 'PULSE',
+      detail: '$ready/3 core · $crashCount crash groups',
+      healthy: healthy,
+      loading: false,
     );
   }
 }
 
-class _Metric extends StatelessWidget {
-  const _Metric({required this.label, required this.value});
-  final String label;
-  final String value;
+class _HudHeader extends StatelessWidget {
+  const _HudHeader({
+    required this.state,
+    required this.pulse,
+    required this.busy,
+    required this.onRefresh,
+    required this.onAssistant,
+    required this.assistantAvailable,
+    required this.assistantHeld,
+    required this.onSignOut,
+  });
+
+  final String state;
+  final _PulseSnapshot pulse;
+  final bool busy;
+  final Future<void> Function() onRefresh;
+  final Future<void> Function() onAssistant;
+  final bool assistantAvailable;
+  final bool assistantHeld;
+  final Future<void> Function() onSignOut;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: .65),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Text('$label  $value', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+    return Row(
+      children: [
+        _GlassPanel(
+          compact: true,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(colors: [scheme.primary, scheme.tertiary]),
+                ),
+                child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 16),
+              ),
+              const SizedBox(width: 9),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('NEXT', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 1.6)),
+                  Text(state.toUpperCase(), style: TextStyle(fontSize: 9.5, color: scheme.onSurfaceVariant, letterSpacing: .8)),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const Spacer(),
+        _GlassPanel(
+          compact: true,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: pulse.healthy ? scheme.primary : scheme.error,
+                ),
+              ),
+              const SizedBox(width: 7),
+              Text(pulse.label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.1)),
+              const SizedBox(width: 7),
+              Text(pulse.detail, style: TextStyle(fontSize: 9.5, color: scheme.onSurfaceVariant)),
+            ],
+          ),
+        ),
+        const SizedBox(width: 6),
+        PopupMenuButton<String>(
+          tooltip: 'Next controls',
+          onSelected: (value) {
+            if (value == 'refresh') onRefresh();
+            if (value == 'assistant') onAssistant();
+            if (value == 'signout') onSignOut();
+          },
+          itemBuilder: (_) => [
+            const PopupMenuItem(value: 'refresh', child: Text('Refresh system pulse')),
+            if (assistantAvailable && !assistantHeld)
+              const PopupMenuItem(value: 'assistant', child: Text('Make Next phone assistant')),
+            const PopupMenuDivider(),
+            const PopupMenuItem(value: 'signout', child: Text('Sign out and revoke this phone')),
+          ],
+          child: const Padding(
+            padding: EdgeInsets.all(8),
+            child: Icon(Icons.more_horiz_rounded, size: 22),
+          ),
+        ),
+      ],
     );
   }
 }
 
-class _VoiceCard extends StatelessWidget {
-  const _VoiceCard({
-    required this.checking,
-    required this.available,
-    required this.held,
-    required this.onRequest,
+class _VoiceCore extends StatefulWidget {
+  const _VoiceCore({
+    required this.state,
+    required this.level,
+    required this.listening,
+    required this.speaking,
+    required this.thinking,
+    required this.onTap,
   });
 
-  final bool checking;
-  final bool available;
-  final bool held;
-  final Future<void> Function() onRequest;
+  final String state;
+  final double level;
+  final bool listening;
+  final bool speaking;
+  final bool thinking;
+  final Future<void> Function() onTap;
+
+  @override
+  State<_VoiceCore> createState() => _VoiceCoreState();
+}
+
+class _VoiceCoreState extends State<_VoiceCore> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 4),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Row(
-              children: [
-                Icon(Icons.graphic_eq_rounded),
-                SizedBox(width: 10),
-                Text('Voice presence', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Text(
-              checking
-                  ? 'Checking Android assistant support…'
-                  : held
-                      ? 'Next is selected as your assistant on this phone.'
-                      : available
-                          ? 'Android can let Next become your selected assistant.'
-                          : 'Assistant-role support is unavailable on this device. In-app voice can still work.',
-              style: TextStyle(color: theme.colorScheme.onSurfaceVariant, height: 1.45),
-            ),
-            if (!checking && available && !held) ...[
-              const SizedBox(height: 14),
-              FilledButton.icon(
-                onPressed: onRequest,
-                icon: const Icon(Icons.mic_rounded),
-                label: const Text('Make Next my assistant'),
+    final scheme = Theme.of(context).colorScheme;
+    final active = widget.listening || widget.speaking || widget.thinking;
+    final size = 164.0 + (widget.level * 22);
+
+    return Semantics(
+      button: true,
+      label: widget.listening ? 'Pause Next listening' : 'Start Next voice',
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, _) {
+            final pulse = .5 + .5 * math.sin(_controller.value * math.pi * 2);
+            return SizedBox(
+              width: 250,
+              height: 250,
+              child: CustomPaint(
+                painter: _VoiceRingPainter(
+                  progress: _controller.value,
+                  intensity: active ? .45 + pulse * .35 : .18,
+                  primary: scheme.primary,
+                  secondary: scheme.tertiary,
+                ),
+                child: Center(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    curve: Curves.easeOut,
+                    width: size,
+                    height: size,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(
+                        colors: [
+                          scheme.primary.withValues(alpha: active ? .95 : .72),
+                          scheme.tertiary.withValues(alpha: active ? .68 : .36),
+                          scheme.surface.withValues(alpha: .12),
+                        ],
+                        stops: const [0, .58, 1],
+                      ),
+                      border: Border.all(color: scheme.primary.withValues(alpha: .42)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: scheme.primary.withValues(alpha: active ? .34 : .15),
+                          blurRadius: active ? 48 : 28,
+                          spreadRadius: active ? 8 : 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      widget.thinking
+                          ? Icons.auto_awesome_rounded
+                          : widget.speaking
+                              ? Icons.graphic_eq_rounded
+                              : widget.listening
+                                  ? Icons.mic_rounded
+                                  : Icons.mic_none_rounded,
+                      color: Colors.white,
+                      size: 48,
+                    ),
+                  ),
+                ),
               ),
-            ],
-          ],
+            );
+          },
         ),
       ),
     );
   }
 }
 
-class _ApprovalCard extends StatelessWidget {
-  const _ApprovalCard({
+class _VoiceRingPainter extends CustomPainter {
+  const _VoiceRingPainter({
+    required this.progress,
+    required this.intensity,
+    required this.primary,
+    required this.secondary,
+  });
+
+  final double progress;
+  final double intensity;
+  final Color primary;
+  final Color secondary;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final base = math.min(size.width, size.height) / 2;
+    for (var i = 0; i < 3; i++) {
+      final radius = base * (.62 + i * .14) + math.sin((progress + i * .21) * math.pi * 2) * 5;
+      final paint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = i == 0 ? 1.8 : 1
+        ..color = (i.isEven ? primary : secondary).withValues(alpha: intensity / (i + 1));
+      canvas.drawCircle(center, radius, paint);
+    }
+
+    final arcPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.2
+      ..strokeCap = StrokeCap.round
+      ..color = primary.withValues(alpha: intensity + .12);
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: base * .86),
+      progress * math.pi * 2,
+      math.pi * .58,
+      false,
+      arcPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _VoiceRingPainter oldDelegate) {
+    return oldDelegate.progress != progress || oldDelegate.intensity != intensity || oldDelegate.primary != primary || oldDelegate.secondary != secondary;
+  }
+}
+
+class _LiveTranscriptHud extends StatelessWidget {
+  const _LiveTranscriptHud({
+    required this.heard,
+    required this.answer,
+    required this.error,
+    required this.listening,
+    required this.speaking,
+    required this.thinking,
+  });
+
+  final String heard;
+  final String answer;
+  final String error;
+  final bool listening;
+  final bool speaking;
+  final bool thinking;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return _GlassPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (heard.isNotEmpty) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('YOU', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, letterSpacing: 1.5, color: scheme.primary)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    heard,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 14, color: scheme.onSurfaceVariant, height: 1.35),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+          ],
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('NEXT', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, letterSpacing: 1.5, color: scheme.tertiary)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 180),
+                  child: Text(
+                    thinking ? 'Thinking…' : answer,
+                    key: ValueKey('$thinking-$answer'),
+                    maxLines: 5,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 15.5, height: 1.42, fontWeight: FontWeight.w500),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (error.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: scheme.errorContainer.withValues(alpha: .42),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: scheme.error, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(error, style: const TextStyle(fontSize: 11.5))),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ApprovalHud extends StatelessWidget {
+  const _ApprovalHud({
     required this.action,
     required this.busy,
     required this.onApprove,
@@ -583,150 +908,180 @@ class _ApprovalCard extends StatelessWidget {
   final Future<void> Function() onApprove;
   final Future<void> Function() onCancel;
 
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final summary = (action['summary'] ?? 'Owner action').toString();
-    final payload = action['payload'] is Map ? Map<String, dynamic>.from(action['payload'] as Map) : const <String, dynamic>{};
-    final subject = payload['subject']?.toString();
-    final text = payload['text']?.toString();
-
-    return Card(
-      color: scheme.secondaryContainer.withValues(alpha: .55),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.verified_user_rounded, color: scheme.primary),
-                const SizedBox(width: 9),
-                const Expanded(child: Text('Owner approval required', style: TextStyle(fontWeight: FontWeight.w800))),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(summary, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-            if (subject?.isNotEmpty == true) ...[
-              const SizedBox(height: 10),
-              Text(subject!, style: const TextStyle(fontWeight: FontWeight.w700)),
-            ],
-            if (text?.isNotEmpty == true) ...[
-              const SizedBox(height: 8),
-              Text(text!, maxLines: 8, overflow: TextOverflow.ellipsis, style: const TextStyle(height: 1.45)),
-            ],
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: busy ? null : onCancel,
-                    child: const Text('Cancel'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: busy ? null : onApprove,
-                    icon: const Icon(Icons.fingerprint_rounded),
-                    label: Text(busy ? 'Checking…' : 'Approve'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
+  String get _detail {
+    final payload = action['payload'];
+    if (payload is! Map) return '';
+    final subject = payload['subject']?.toString().trim() ?? '';
+    final text = payload['text']?.toString().trim() ?? '';
+    if (subject.isNotEmpty && text.isNotEmpty) return '$subject\n$text';
+    return text;
   }
-}
-
-class _PromptChip extends StatelessWidget {
-  const _PromptChip({required this.icon, required this.label, required this.onPressed});
-  final IconData icon;
-  final String label;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return ActionChip(
-      avatar: Icon(icon, size: 18),
-      label: Text(label),
-      onPressed: onPressed,
-    );
-  }
-}
-
-class _ChatMessage {
-  const _ChatMessage(this.role, this.text, {this.tool});
-  final String role;
-  final String text;
-  final String? tool;
-
-  factory _ChatMessage.user(String text) => _ChatMessage('user', text);
-  factory _ChatMessage.assistant(String text, {String? tool}) => _ChatMessage('assistant', text, tool: tool);
-}
-
-class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message});
-  final _ChatMessage message;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final user = message.role == 'user';
-    return Align(
-      alignment: user ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 720),
-        margin: const EdgeInsets.only(bottom: 14),
-        padding: user ? const EdgeInsets.symmetric(horizontal: 15, vertical: 12) : const EdgeInsets.fromLTRB(0, 8, 24, 8),
-        decoration: user
-            ? BoxDecoration(color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(20))
-            : null,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (!user) ...[
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.auto_awesome_rounded, color: scheme.primary, size: 18),
-                  const SizedBox(width: 7),
-                  const Text('Next', style: TextStyle(fontWeight: FontWeight.w800)),
-                ],
-              ),
-              const SizedBox(height: 8),
-            ],
-            SelectableText(message.text, style: const TextStyle(height: 1.55)),
-            if (!user && message.tool != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                'Checked ${message.tool!.replaceAll('_', ' ')}',
-                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ThinkingRow extends StatelessWidget {
-  const _ThinkingRow();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.symmetric(vertical: 12),
-      child: Row(
+    return _GlassPanel(
+      strong: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-          SizedBox(width: 10),
-          Text('Next is checking what matters…'),
+          Row(
+            children: [
+              Icon(Icons.fingerprint_rounded, color: scheme.primary, size: 19),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text('OWNER APPROVAL', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+              ),
+              Text('NOT EXECUTED', style: TextStyle(fontSize: 9, color: scheme.onSurfaceVariant, letterSpacing: .7)),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Text(action['summary']?.toString() ?? 'Review this action', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          if (_detail.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(_detail, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11.5, height: 1.35, color: scheme.onSurfaceVariant)),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: busy ? null : onApprove,
+                  icon: const Icon(Icons.fingerprint_rounded, size: 17),
+                  label: Text(busy ? 'Confirming…' : 'Approve'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(onPressed: busy ? null : onCancel, child: const Text('Cancel')),
+            ],
+          ),
         ],
       ),
     );
   }
+}
+
+class _EventStrip extends StatelessWidget {
+  const _EventStrip({required this.events});
+  final List<_HudEvent> events;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 30,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: events.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 7),
+        itemBuilder: (_, index) {
+          final event = events[index];
+          final icon = switch (event.severity) {
+            _HudSeverity.info => Icons.bolt_rounded,
+            _HudSeverity.warning => Icons.warning_amber_rounded,
+            _HudSeverity.error => Icons.error_outline_rounded,
+          };
+          final color = event.severity == _HudSeverity.error ? scheme.error : scheme.primary;
+          return Container(
+            constraints: const BoxConstraints(maxWidth: 250),
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHighest.withValues(alpha: .28),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: scheme.outlineVariant.withValues(alpha: .25)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 12, color: color),
+                const SizedBox(width: 5),
+                Flexible(child: Text(event.text, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 9.5))),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+enum _HudSeverity { info, warning, error }
+
+class _HudEvent {
+  const _HudEvent(this.text, this.severity);
+  final String text;
+  final _HudSeverity severity;
+}
+
+class _GlassPanel extends StatelessWidget {
+  const _GlassPanel({required this.child, this.compact = false, this.strong = false});
+  final Widget child;
+  final bool compact;
+  final bool strong;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(compact ? 18 : 22),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: strong ? 18 : 12, sigmaY: strong ? 18 : 12),
+        child: Container(
+          padding: compact ? const EdgeInsets.symmetric(horizontal: 10, vertical: 7) : const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: scheme.surface.withValues(alpha: strong ? .66 : .46),
+            borderRadius: BorderRadius.circular(compact ? 18 : 22),
+            border: Border.all(color: scheme.outlineVariant.withValues(alpha: strong ? .38 : .24)),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+class _CyberBackdrop extends StatelessWidget {
+  const _CyberBackdrop({required this.active, required this.level});
+  final bool active;
+  final double level;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: RadialGradient(
+          center: const Alignment(0, -.18),
+          radius: 1.25,
+          colors: [
+            scheme.primary.withValues(alpha: active ? .16 + level * .08 : .07),
+            scheme.tertiary.withValues(alpha: active ? .09 : .035),
+            scheme.surface,
+          ],
+          stops: const [0, .48, 1],
+        ),
+      ),
+      child: CustomPaint(painter: _GridPainter(color: scheme.outlineVariant.withValues(alpha: .08))),
+    );
+  }
+}
+
+class _GridPainter extends CustomPainter {
+  const _GridPainter({required this.color});
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = color..strokeWidth = .6;
+    const gap = 42.0;
+    for (double x = 0; x <= size.width; x += gap) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+    for (double y = 0; y <= size.height; y += gap) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _GridPainter oldDelegate) => oldDelegate.color != color;
 }
