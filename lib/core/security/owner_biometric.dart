@@ -12,7 +12,7 @@ class OwnerBiometric {
       final supported = await _auth.isDeviceSupported();
       final canCheck = await _auth.canCheckBiometrics;
       if (!supported && !canCheck) return false;
-      return _auth.authenticate(
+      return await _auth.authenticate(
         localizedReason: reason,
         biometricOnly: false,
         persistAcrossBackgrounding: true,
