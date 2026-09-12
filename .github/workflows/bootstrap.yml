@@ -1,0 +1,54 @@
+name: Bootstrap Next Flutter
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/bootstrap.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.2'
+          channel: stable
+          cache: true
+
+      - name: Create Android Flutter project
+        run: >-
+          flutter create
+          --project-name next
+          --org com.petersmartlink
+          --platforms=android
+          --android-language kotlin
+          .
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Verify generated project
+        run: flutter analyze
+
+      - name: Commit generated scaffold
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+            exit 0
+          fi
+          git commit -m "chore: bootstrap Next Flutter Android app [skip ci]"
+          git push
