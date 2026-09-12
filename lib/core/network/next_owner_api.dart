@@ -9,13 +9,17 @@ class OwnerAccessExpired implements Exception {
 class NextChatReply {
   const NextChatReply({
     required this.answer,
-    required this.conversationId,
+    this.conversationId,
     this.tool,
+    this.approvalRequired = false,
+    this.action,
   });
 
   final String answer;
-  final String conversationId;
+  final String? conversationId;
   final String? tool;
+  final bool approvalRequired;
+  final Map<String, dynamic>? action;
 }
 
 class NextOwnerApi {
@@ -77,14 +81,25 @@ class NextOwnerApi {
     );
     final data = _requireMap(response);
     final answer = data['answer'];
-    final id = data['conversation_id'];
-    if (answer is! String || answer.trim().isEmpty || id is! String || id.isEmpty) {
+    if (answer is! String || answer.trim().isEmpty) {
       throw StateError('Next returned an incomplete response.');
     }
+
+    final rawAction = data['action'];
+    final action = rawAction is Map<String, dynamic>
+        ? rawAction
+        : rawAction is Map
+            ? Map<String, dynamic>.from(rawAction)
+            : null;
+
     return NextChatReply(
       answer: answer.trim(),
-      conversationId: id,
+      conversationId: data['conversation_id'] is String
+          ? data['conversation_id'] as String
+          : conversationId,
       tool: data['tool'] is String ? data['tool'] as String : null,
+      approvalRequired: data['approval_required'] == true,
+      action: action,
     );
   }
 
