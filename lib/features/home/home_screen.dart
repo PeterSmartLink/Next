@@ -560,10 +560,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     assistantHeld: _assistantHeld,
                     onSignOut: widget.onSignOut,
                   ),
-                  Expanded(
-                    child: Column(children: [
-                      Flexible(
-                        flex: _workspace.isOpen ? 1 : 3,
+                  Expanded(child: LayoutBuilder(builder: (context, constraints) {
+                    final voiceHeight = _workspace.isOpen
+                        ? constraints.maxHeight * 0.25 : constraints.maxHeight;
+                    return Stack(children: [
+                      Positioned(top: 0, left: 0, right: 0, height: voiceHeight,
                         child: Center(child: FittedBox(fit: BoxFit.scaleDown,
                           child: _VoiceCore(
                             state: _voiceState, level: _voiceLevel,
@@ -572,10 +573,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                         )),
                       ),
-                      if (_workspace.isOpen)
-                        Expanded(flex: 3, child: WorkspacePanel(controller: _workspace)),
-                    ]),
-                  ),
+                      Positioned(
+                        top: constraints.maxHeight * 0.25, left: 0, right: 0,
+                        height: constraints.maxHeight * 0.75,
+                        child: Offstage(offstage: !_workspace.isOpen,
+                          child: TickerMode(enabled: _workspace.isOpen,
+                            child: WorkspacePanel(controller: _workspace))),
+                      ),
+                    ]);
+                  })),
                   Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                     IconButton(tooltip: 'Show controls', onPressed: () => setState(() => _showTools = !_showTools),
                       icon: const Icon(Icons.add_circle_outline)),

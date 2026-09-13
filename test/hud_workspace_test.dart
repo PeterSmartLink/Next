@@ -27,10 +27,12 @@ void main() {
     controller.openText(title: 'Second report', text: 'Second report body');
     await tester.pumpWidget(MaterialApp(home: Scaffold(body: AnimatedBuilder(
       animation: controller,
-      builder: (context, _) => WorkspacePanel(controller: controller),
+      builder: (context, _) => Offstage(offstage: !controller.isOpen,
+        child: WorkspacePanel(controller: controller)),
     ))));
     expect(find.text('First report body'), findsOneWidget);
     expect(find.text('Second report body'), findsOneWidget);
+    final firstElement = tester.element(find.text('First report body'));
     await tester.tap(find.byTooltip('Enlarge selected'));
     await tester.pump();
     expect(find.text('First report body'), findsNothing);
@@ -44,6 +46,7 @@ void main() {
     controller.restore();
     await tester.pump();
     expect(find.text('First report body'), findsOneWidget);
+    expect(identical(tester.element(find.text('First report body')), firstElement), isTrue);
     await tester.tap(find.byTooltip('Close First report'));
     await tester.pump();
     expect(find.text('First report body'), findsNothing);

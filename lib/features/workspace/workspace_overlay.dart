@@ -47,8 +47,7 @@ class WorkspacePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final item = controller.activeItem;
-    if (item == null) return const SizedBox.shrink();
+    if (controller.items.isEmpty) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
 
     return ClipRRect(
@@ -70,24 +69,34 @@ class WorkspacePanel extends StatelessWidget {
                 Expanded(child: LayoutBuilder(builder: (context, constraints) {
                   final panels = controller.visibleItems;
                   final horizontal = constraints.maxWidth >= 700;
-                  return Flex(
-                    direction: horizontal ? Axis.horizontal : Axis.vertical,
-                    children: [
-                      for (final panel in panels)
-                        Expanded(key: ValueKey(panel.id), child: Column(children: [
-                          Row(children: [
-                            Expanded(child: TextButton(
-                              onPressed: () => controller.activate(controller.items.indexOf(panel)),
-                              child: Text(panel.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                            )),
-                            IconButton(tooltip: 'Close ${panel.title}',
-                              onPressed: () => controller.close(panel.id),
-                              icon: const Icon(Icons.close, size: 20)),
-                          ]),
-                          Expanded(child: _WorkspaceBody(item: panel)),
-                        ])),
-                    ],
-                  );
+                  return Stack(children: [
+                    for (final panel in controller.items)
+                      Positioned(
+                        key: ValueKey(panel.id),
+                        left: horizontal && panels.indexOf(panel) == 1 ? constraints.maxWidth / 2 : 0,
+                        top: !horizontal && panels.indexOf(panel) == 1 ? constraints.maxHeight / 2 : 0,
+                        width: horizontal && panels.length > 1 ? constraints.maxWidth / 2 : constraints.maxWidth,
+                        height: !horizontal && panels.length > 1 ? constraints.maxHeight / 2 : constraints.maxHeight,
+                        child: Offstage(
+                          offstage: !panels.contains(panel),
+                          child: TickerMode(
+                            enabled: panels.contains(panel),
+                            child: Column(children: [
+                              Row(children: [
+                                Expanded(child: TextButton(
+                                  onPressed: () => controller.activate(controller.items.indexOf(panel)),
+                                  child: Text(panel.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                )),
+                                IconButton(tooltip: 'Close ${panel.title}',
+                                  onPressed: () => controller.close(panel.id),
+                                  icon: const Icon(Icons.close, size: 20)),
+                              ]),
+                              Expanded(child: _WorkspaceBody(item: panel)),
+                            ]),
+                          ),
+                        ),
+                      ),
+                  ]);
                 })),
               ],
             ),
@@ -199,21 +208,30 @@ class _WebPaneState extends State<_WebPane> {
   late final WebViewController _controller;
   bool _loading = true;
   String _host = '';
+  bool _secure = false;
+  String? _pageError;
+  int _navigation = 0;
 
   @override
   void initState() {
     super.initState();
     _host = widget.uri.host;
+    _secure = widget.uri.scheme == 'https';
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.transparent)
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (url) {
+            _navigation++;
+            WorkspaceController.instance.updateWebContext(
+              itemId: widget.itemId, uri: Uri.parse(url), title: '', text: '');
             final uri = Uri.tryParse(url);
             if (!mounted) return;
             setState(() {
               _loading = true;
+              _pageError = null;
+              _secure = uri?.scheme == 'https';
               _host = uri?.host ?? _host;
             });
           },
@@ -226,9 +244,16 @@ class _WebPaneState extends State<_WebPane> {
             });
             unawaited(_capturePageContext(url));
           },
+          onWebResourceError: (error) {
+            if (!mounted || error.isForMainFrame != true) return;
+            setState(() {
+              _loading = false;
+              _pageError = 'This page could not load. Check your connection and try again.';
+            });
+          },
           onNavigationRequest: (request) {
             final uri = Uri.tryParse(request.url);
-            if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http')) {
+            if (uri == null || uri.host.isEmpty || uri.userInfo.isNotEmpty || (uri.scheme != 'https' && uri.scheme != 'http')) {
               return NavigationDecision.prevent;
             }
             return NavigationDecision.navigate;
@@ -241,6 +266,7 @@ class _WebPaneState extends State<_WebPane> {
   Future<void> _capturePageContext(String url) async {
     final uri = Uri.tryParse(url);
     if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http')) return;
+    final navigation = _navigation;
     try {
       final titleValue = await _controller.runJavaScriptReturningResult(
         'document.title || ""',
@@ -248,6 +274,7 @@ class _WebPaneState extends State<_WebPane> {
       final textValue = await _controller.runJavaScriptReturningResult(
         'document.body ? document.body.innerText : ""',
       );
+      if (!mounted || navigation != _navigation) return;
       WorkspaceController.instance.updateWebContext(
         itemId: widget.itemId,
         uri: uri,
@@ -303,7 +330,7 @@ class _WebPaneState extends State<_WebPane> {
               Expanded(
                 child: Row(
                   children: [
-                    const Icon(Icons.lock_outline_rounded, size: 13),
+                    Icon(_secure ? Icons.lock_outline_rounded : Icons.no_encryption_outlined, size: 13),
                     const SizedBox(width: 5),
                     Expanded(
                       child: Text(
@@ -328,7 +355,20 @@ class _WebPaneState extends State<_WebPane> {
           ),
         ),
         const Divider(height: 1),
-        Expanded(child: WebViewWidget(controller: _controller)),
+        Expanded(child: Stack(children: [
+          Positioned.fill(child: WebViewWidget(controller: _controller)),
+          if (_pageError != null) Positioned.fill(child: ColoredBox(
+            color: Theme.of(context).colorScheme.surface,
+            child: Center(child: SingleChildScrollView(child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text(_pageError!, textAlign: TextAlign.center),
+                TextButton.icon(onPressed: _controller.reload,
+                  icon: const Icon(Icons.refresh), label: const Text('Try again')),
+              ]),
+            ))),
+          )),
+        ])),
       ],
     );
   }
@@ -358,7 +398,8 @@ class _ImagePane extends StatelessWidget {
         minScale: 0.5,
         maxScale: 5,
         child: Center(
-          child: Image.file(File(path), fit: BoxFit.contain),
+          child: Image.file(File(path), fit: BoxFit.contain,
+            errorBuilder: (context, error, stack) => const Text('This image is unavailable. Open it again from Files.')),
         ),
       ),
     );
@@ -375,6 +416,7 @@ class _TextPane extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return SelectionArea(
       child: SingleChildScrollView(
+        key: PageStorageKey(item.id),
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -392,7 +434,7 @@ class _TextPane extends StatelessWidget {
               item.text ?? '',
               style: const TextStyle(
                 fontFamily: 'monospace',
-                fontSize: 12.5,
+                fontSize: 15,
                 height: 1.45,
               ),
             ),
