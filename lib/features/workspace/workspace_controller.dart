@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 
+import 'office_text_extractor.dart';
+
 enum WorkspaceKind { web, pdf, image, text, report, unsupported }
 
 class WorkspaceItem {
@@ -209,20 +211,55 @@ class WorkspaceController extends ChangeNotifier {
     }
 
     if (const {'docx', 'xlsx', 'pptx'}.contains(extension)) {
-      _add(
-        WorkspaceItem(
-          id: _id('office'),
-          kind: WorkspaceKind.unsupported,
-          title: picked.name,
-          subtitle: _sizeLabel(length),
-          text: 'This Office file is private. Next will not upload it to a public document viewer. '
-              'The private server-side Office preview pipeline is not connected yet, so the file is kept closed instead of leaking it to a third-party viewer.',
-        ),
-      );
-      return WorkspaceOpenResult(
-        false,
-        '${picked.name} is recognized, but private Office preview is not connected yet.',
-      );
+      if (length > OfficeTextExtractor.maxInputBytes) {
+        return const WorkspaceOpenResult(false, 'That Office file is larger than the 20 MB private-preview limit.');
+      }
+      try {
+        final bytes = await picked.readAsBytes();
+        if (session != _session) return const WorkspaceOpenResult(false, 'The owner session ended.');
+        final extraction = OfficeTextExtractor.extract(bytes, extension);
+        _add(
+          WorkspaceItem(
+            id: _id('office'),
+            kind: WorkspaceKind.text,
+            title: picked.name,
+            text: extraction.text,
+            subtitle: '${extraction.kindLabel} · ${extraction.details} · ${_sizeLabel(length)} · local private preview',
+          ),
+        );
+        return WorkspaceOpenResult(
+          true,
+          'Opened ${picked.name} privately on this phone. Nothing was uploaded to a document viewer.',
+        );
+      } on FormatException catch (error) {
+        final message = error.message.toString().trim();
+        _add(
+          WorkspaceItem(
+            id: _id('office-error'),
+            kind: WorkspaceKind.unsupported,
+            title: picked.name,
+            subtitle: _sizeLabel(length),
+            text: message.isEmpty
+                ? 'Next could not extract readable text from this Office file.'
+                : message,
+          ),
+        );
+        return WorkspaceOpenResult(
+          false,
+          message.isEmpty ? 'This Office file could not be previewed safely.' : message,
+        );
+      } catch (_) {
+        _add(
+          WorkspaceItem(
+            id: _id('office-error'),
+            kind: WorkspaceKind.unsupported,
+            title: picked.name,
+            subtitle: _sizeLabel(length),
+            text: 'Next could not safely decode this Office file. The file stayed on this phone and was not uploaded.',
+          ),
+        );
+        return const WorkspaceOpenResult(false, 'This Office file could not be previewed safely.');
+      }
     }
 
     return const WorkspaceOpenResult(false, 'That file type is not supported in the live workspace yet.');
