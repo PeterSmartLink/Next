@@ -18,7 +18,7 @@ void main() {
 
     expect(activity, contains('isAllowedTelegramOwnerLink'));
     expect(activity, contains('setPackage("org.telegram.messenger")'));
-    expect(activity, contains(r'Regex("^owner_[A-Za-z0-9_-]{16,80}$")'.replaceAll(r'\"', '"')));
+    expect(activity, contains(r'Regex("^owner_[A-Za-z0-9_-]{16,80}$")'.replaceAll('\\"', '"')));
 
     expect(gate, contains('_telegramChallenge'));
     expect(gate, contains('No browser sign-in is required for this step.'));
