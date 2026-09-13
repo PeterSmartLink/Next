@@ -277,33 +277,43 @@ class OwnerAuthService {
     _requireOk(response, fallback: 'Could not start owner device enrollment.');
   }
 
-  Future<void> verifyOwnerOtp(String otp) async {
+  Future<String> verifyOwnerOtp(String otp) async {
     final response = await _dio.post<dynamic>(
       '/auth/admin/verify-otp',
       data: {'otp': otp.trim().toUpperCase()},
       options: Options(headers: await _bearerHeaders()),
     );
-    _requireOk(response, fallback: 'The verification code was not accepted.');
-  }
-
-  Future<void> startTelegramOwnerVerification() async {
-    final response = await _dio.post<dynamic>(
-      '/api/auth/telegram/start',
-      queryParameters: const {'mode': 'admin'},
-      data: const <String, dynamic>{},
-      options: Options(headers: await _bearerHeaders()),
-    );
     final data = _map(response.data);
     if (!_successful(response, data)) {
       throw OwnerAuthException(
-        _error(data, 'Telegram owner verification could not start.'),
+        _error(data, 'The verification code was not accepted.'),
+        code: data?['code'] is String ? data!['code'] as String : null,
       );
     }
-    final url = data?['authorization_url'];
-    if (url is! String || url.isEmpty) {
-      throw const OwnerAuthException('Telegram did not return a verification link.');
+    final challenge = data?['telegram_challenge'];
+    if (challenge is! String ||
+        !RegExp(r'^[A-Za-z0-9_-]{16,80}$').hasMatch(challenge)) {
+      throw const OwnerAuthException(
+        'OTYA did not return a valid Telegram enrollment challenge.',
+      );
     }
-    await NextPlatformBridge.openUrl(url);
+    return challenge;
+  }
+
+  Future<void> startTelegramOwnerVerification(String challenge) async {
+    final value = challenge.trim();
+    if (!RegExp(r'^[A-Za-z0-9_-]{16,80}$').hasMatch(value)) {
+      throw const OwnerAuthException('The Telegram enrollment challenge is invalid.');
+    }
+    final uri = Uri(
+      scheme: 'tg',
+      host: 'resolve',
+      queryParameters: {
+        'domain': 'OtyaPlayerBot',
+        'start': 'owner_$value',
+      },
+    );
+    await NextPlatformBridge.openUrl(uri.toString());
   }
 
   Future<void> completeOwnerVerification() async {
