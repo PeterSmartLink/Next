@@ -172,8 +172,23 @@ class NextOwnerApi {
       _clearMatchingPending(action);
     }
 
+    final trimmedAnswer = answer.trim();
+    if (workspaceContext != null && !approvalRequired) {
+      final sourceTitle = workspaceContext.title.trim();
+      final source = workspaceContext.source.trim();
+      WorkspaceController.instance.openText(
+        title: comparesWorkspace
+            ? 'Next comparison'
+            : 'Next analysis · ${sourceTitle.isEmpty ? 'Workspace' : sourceTitle}',
+        text: trimmedAnswer,
+        subtitle: comparesWorkspace
+            ? 'AI comparison of the visible owner-selected sources'
+            : 'AI analysis of ${source.isEmpty ? 'the selected workspace source' : source}',
+      );
+    }
+
     return NextChatReply(
-      answer: answer.trim(),
+      answer: trimmedAnswer,
       conversationId: data['conversation_id'] is String
           ? data['conversation_id'] as String
           : conversationId,
