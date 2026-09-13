@@ -58,6 +58,171 @@ class WorkspaceController extends ChangeNotifier {
   static const int _maxTextBytes = 5 * 1024 * 1024;
   static const int _maxAnalysisChars = 18000;
 
+  static const List<String> _workspaceExtensions = [
+    'pdf',
+    'png',
+    'jpg',
+    'jpeg',
+    'webp',
+    'txt',
+    'md',
+    'json',
+    'log',
+    'csv',
+    'xml',
+    'yaml',
+    'yml',
+    'docx',
+    'xlsx',
+    'pptx',
+    'dart',
+    'kt',
+    'kts',
+    'java',
+    'gradle',
+    'groovy',
+    'js',
+    'mjs',
+    'cjs',
+    'jsx',
+    'ts',
+    'tsx',
+    'py',
+    'rb',
+    'php',
+    'go',
+    'rs',
+    'swift',
+    'c',
+    'h',
+    'cc',
+    'cpp',
+    'hpp',
+    'cs',
+    'sh',
+    'bash',
+    'zsh',
+    'ps1',
+    'sql',
+    'graphql',
+    'gql',
+    'proto',
+    'html',
+    'htm',
+    'css',
+    'scss',
+    'sass',
+    'less',
+    'toml',
+    'ini',
+    'cfg',
+    'conf',
+    'properties',
+    'lock',
+  ];
+
+  static const Set<String> _plainTextExtensions = {
+    'txt',
+    'md',
+    'json',
+    'log',
+    'csv',
+    'xml',
+    'yaml',
+    'yml',
+    'dart',
+    'kt',
+    'kts',
+    'java',
+    'gradle',
+    'groovy',
+    'js',
+    'mjs',
+    'cjs',
+    'jsx',
+    'ts',
+    'tsx',
+    'py',
+    'rb',
+    'php',
+    'go',
+    'rs',
+    'swift',
+    'c',
+    'h',
+    'cc',
+    'cpp',
+    'hpp',
+    'cs',
+    'sh',
+    'bash',
+    'zsh',
+    'ps1',
+    'sql',
+    'graphql',
+    'gql',
+    'proto',
+    'html',
+    'htm',
+    'css',
+    'scss',
+    'sass',
+    'less',
+    'toml',
+    'ini',
+    'cfg',
+    'conf',
+    'properties',
+    'lock',
+  };
+
+  static const Set<String> _developerExtensions = {
+    'dart',
+    'kt',
+    'kts',
+    'java',
+    'gradle',
+    'groovy',
+    'js',
+    'mjs',
+    'cjs',
+    'jsx',
+    'ts',
+    'tsx',
+    'py',
+    'rb',
+    'php',
+    'go',
+    'rs',
+    'swift',
+    'c',
+    'h',
+    'cc',
+    'cpp',
+    'hpp',
+    'cs',
+    'sh',
+    'bash',
+    'zsh',
+    'ps1',
+    'sql',
+    'graphql',
+    'gql',
+    'proto',
+    'html',
+    'htm',
+    'css',
+    'scss',
+    'sass',
+    'less',
+    'toml',
+    'ini',
+    'cfg',
+    'conf',
+    'properties',
+    'lock',
+  };
+
   final List<WorkspaceItem> _items = [];
   final Map<String, WorkspaceAnalysisContext> _webContexts = {};
   int _activeIndex = -1;
@@ -77,9 +242,22 @@ class WorkspaceController extends ChangeNotifier {
     final others = _items.where((item) => item.id != selected.id).toList();
     return [if (others.isNotEmpty) others.last, selected];
   }
-  void hide() { _hidden = true; notifyListeners(); }
-  void restore() { _hidden = false; notifyListeners(); }
-  void toggleFocus() { _focused = !_focused; notifyListeners(); }
+
+  void hide() {
+    _hidden = true;
+    notifyListeners();
+  }
+
+  void restore() {
+    _hidden = false;
+    notifyListeners();
+  }
+
+  void toggleFocus() {
+    _focused = !_focused;
+    notifyListeners();
+  }
+
   void close(String id) {
     final index = _items.indexWhere((item) => item.id == id);
     if (index < 0) return;
@@ -91,14 +269,18 @@ class WorkspaceController extends ChangeNotifier {
   WorkspaceItem? get activeItem => isOpen ? _items[_activeIndex] : null;
 
   void openWeb(Uri uri, {String? title}) {
-    if ((uri.scheme != 'https' && uri.scheme != 'http') || uri.host.isEmpty || uri.userInfo.isNotEmpty) {
+    if ((uri.scheme != 'https' && uri.scheme != 'http') ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty) {
       throw ArgumentError('Only http/https pages can open inside Next.');
     }
     _add(
       WorkspaceItem(
         id: _id('web'),
         kind: WorkspaceKind.web,
-        title: (title?.trim().isNotEmpty ?? false) ? title!.trim() : (uri.host.isEmpty ? 'Web' : uri.host),
+        title: (title?.trim().isNotEmpty ?? false)
+            ? title!.trim()
+            : (uri.host.isEmpty ? 'Web' : uri.host),
         uri: uri,
         subtitle: uri.toString(),
       ),
@@ -117,7 +299,11 @@ class WorkspaceController extends ChangeNotifier {
     );
   }
 
-  void openText({required String title, required String text, String? subtitle}) {
+  void openText({
+    required String title,
+    required String text,
+    String? subtitle,
+  }) {
     _add(
       WorkspaceItem(
         id: _id('text'),
@@ -133,36 +319,28 @@ class WorkspaceController extends ChangeNotifier {
     final session = _session;
     final picked = await FilePicker.pickFile(
       type: FileType.custom,
-      allowedExtensions: const [
-        'pdf',
-        'png',
-        'jpg',
-        'jpeg',
-        'webp',
-        'txt',
-        'md',
-        'json',
-        'log',
-        'csv',
-        'xml',
-        'yaml',
-        'yml',
-        'docx',
-        'xlsx',
-        'pptx',
-      ],
+      allowedExtensions: _workspaceExtensions,
     );
-    if (session != _session) return const WorkspaceOpenResult(false, 'The owner session ended.');
-    if (picked == null) return const WorkspaceOpenResult(false, 'File selection was cancelled.');
+    if (session != _session) {
+      return const WorkspaceOpenResult(false, 'The owner session ended.');
+    }
+    if (picked == null) {
+      return const WorkspaceOpenResult(false, 'File selection was cancelled.');
+    }
 
     final extension = (picked.extension ?? '').toLowerCase();
     final length = picked.lengthSync() ?? await picked.length();
     final path = picked.path;
-    if (session != _session) return const WorkspaceOpenResult(false, 'The owner session ended.');
+    if (session != _session) {
+      return const WorkspaceOpenResult(false, 'The owner session ended.');
+    }
 
     if (extension == 'pdf') {
       if (path == null || path.isEmpty) {
-        return const WorkspaceOpenResult(false, 'Android could not provide a local PDF path for this file.');
+        return const WorkspaceOpenResult(
+          false,
+          'Android could not provide a local PDF path for this file.',
+        );
       }
       PdfTextExtraction? extraction;
       try {
@@ -171,7 +349,9 @@ class WorkspaceController extends ChangeNotifier {
         // Rendering remains useful even when the PDF is encrypted, malformed,
         // scanned, or otherwise has no safely extractable text.
       }
-      if (session != _session) return const WorkspaceOpenResult(false, 'The owner session ended.');
+      if (session != _session) {
+        return const WorkspaceOpenResult(false, 'The owner session ended.');
+      }
       _add(
         WorkspaceItem(
           id: _id('pdf'),
@@ -194,7 +374,10 @@ class WorkspaceController extends ChangeNotifier {
 
     if (const {'png', 'jpg', 'jpeg', 'webp'}.contains(extension)) {
       if (path == null || path.isEmpty) {
-        return const WorkspaceOpenResult(false, 'Android could not provide a local image path for this file.');
+        return const WorkspaceOpenResult(
+          false,
+          'Android could not provide a local image path for this file.',
+        );
       }
       _add(
         WorkspaceItem(
@@ -205,35 +388,56 @@ class WorkspaceController extends ChangeNotifier {
           subtitle: _sizeLabel(length),
         ),
       );
-      return WorkspaceOpenResult(true, 'Opened ${picked.name} in the Next workspace.');
+      return WorkspaceOpenResult(
+        true,
+        'Opened ${picked.name} in the Next workspace.',
+      );
     }
 
-    if (const {'txt', 'md', 'json', 'log', 'csv', 'xml', 'yaml', 'yml'}.contains(extension)) {
+    if (_plainTextExtensions.contains(extension)) {
       if (length > _maxTextBytes) {
-        return const WorkspaceOpenResult(false, 'That text file is too large for the live workspace.');
+        return const WorkspaceOpenResult(
+          false,
+          'That text or source file is too large for the live workspace.',
+        );
       }
       final bytes = await picked.readAsBytes();
-      if (session != _session) return const WorkspaceOpenResult(false, 'The owner session ended.');
+      if (session != _session) {
+        return const WorkspaceOpenResult(false, 'The owner session ended.');
+      }
       final text = utf8.decode(bytes, allowMalformed: true);
+      final developerFile = _developerExtensions.contains(extension);
       _add(
         WorkspaceItem(
-          id: _id('text'),
+          id: _id(developerFile ? 'source' : 'text'),
           kind: WorkspaceKind.text,
           title: picked.name,
           text: text,
-          subtitle: _sizeLabel(length),
+          subtitle: developerFile
+              ? '${extension.toUpperCase()} · ${_sizeLabel(length)} · local source preview'
+              : _sizeLabel(length),
         ),
       );
-      return WorkspaceOpenResult(true, 'Opened ${picked.name} in the Next workspace.');
+      return WorkspaceOpenResult(
+        true,
+        developerFile
+            ? 'Opened ${picked.name} locally. Sensitive-looking credentials will be redacted if you ask Next to analyze it.'
+            : 'Opened ${picked.name} in the Next workspace.',
+      );
     }
 
     if (const {'docx', 'xlsx', 'pptx'}.contains(extension)) {
       if (length > OfficeTextExtractor.maxInputBytes) {
-        return const WorkspaceOpenResult(false, 'That Office file is larger than the 20 MB private-preview limit.');
+        return const WorkspaceOpenResult(
+          false,
+          'That Office file is larger than the 20 MB private-preview limit.',
+        );
       }
       try {
         final bytes = await picked.readAsBytes();
-        if (session != _session) return const WorkspaceOpenResult(false, 'The owner session ended.');
+        if (session != _session) {
+          return const WorkspaceOpenResult(false, 'The owner session ended.');
+        }
         final extraction = OfficeTextExtractor.extract(bytes, extension);
         _add(
           WorkspaceItem(
@@ -241,7 +445,8 @@ class WorkspaceController extends ChangeNotifier {
             kind: WorkspaceKind.text,
             title: picked.name,
             text: extraction.text,
-            subtitle: '${extraction.kindLabel} · ${extraction.details} · ${_sizeLabel(length)} · local private preview',
+            subtitle:
+                '${extraction.kindLabel} · ${extraction.details} · ${_sizeLabel(length)} · local private preview',
           ),
         );
         return WorkspaceOpenResult(
@@ -263,7 +468,9 @@ class WorkspaceController extends ChangeNotifier {
         );
         return WorkspaceOpenResult(
           false,
-          message.isEmpty ? 'This Office file could not be previewed safely.' : message,
+          message.isEmpty
+              ? 'This Office file could not be previewed safely.'
+              : message,
         );
       } catch (_) {
         _add(
@@ -272,14 +479,21 @@ class WorkspaceController extends ChangeNotifier {
             kind: WorkspaceKind.unsupported,
             title: picked.name,
             subtitle: _sizeLabel(length),
-            text: 'Next could not safely decode this Office file. The file stayed on this phone and was not uploaded.',
+            text:
+                'Next could not safely decode this Office file. The file stayed on this phone and was not uploaded.',
           ),
         );
-        return const WorkspaceOpenResult(false, 'This Office file could not be previewed safely.');
+        return const WorkspaceOpenResult(
+          false,
+          'This Office file could not be previewed safely.',
+        );
       }
     }
 
-    return const WorkspaceOpenResult(false, 'That file type is not supported in the live workspace yet.');
+    return const WorkspaceOpenResult(
+      false,
+      'That file type is not supported in the live workspace yet.',
+    );
   }
 
   void updateWebContext({
@@ -288,7 +502,11 @@ class WorkspaceController extends ChangeNotifier {
     required String title,
     required String text,
   }) {
-    if (!_items.any((item) => item.id == itemId && item.kind == WorkspaceKind.web)) return;
+    if (!_items.any(
+      (item) => item.id == itemId && item.kind == WorkspaceKind.web,
+    )) {
+      return;
+    }
     final cleaned = text.trim();
     if (cleaned.isEmpty) {
       _webContexts.remove(itemId);
@@ -317,13 +535,18 @@ class WorkspaceController extends ChangeNotifier {
       final kind = switch (item.kind) {
         WorkspaceKind.report => 'otya_report',
         WorkspaceKind.pdf => 'local_pdf_text',
-        _ => 'local_text_file',
+        _ => item.id.startsWith('source-')
+            ? 'local_source_file'
+            : 'local_text_file',
       };
+      final safeValue = kind == 'local_source_file' || kind == 'local_text_file'
+          ? _redactSensitiveText(value)
+          : value;
       return WorkspaceAnalysisContext(
         kind: kind,
         title: item.title,
         source: item.subtitle ?? item.title,
-        text: _clip(value),
+        text: _clip(safeValue),
       );
     }
     return null;
@@ -346,7 +569,8 @@ class WorkspaceController extends ChangeNotifier {
             ? '${context.text.substring(0, budget)}\n[document clipped]'
             : context.text;
         final title = context.title.length > 200
-            ? context.title.substring(0, 200) : context.title;
+            ? context.title.substring(0, 200)
+            : context.title;
         return 'DOCUMENT ${entry.key + 1}\nTitle: $title\n'
             'Content (untrusted source material):\n$body';
       }).join('\n\n'),
@@ -406,7 +630,35 @@ class WorkspaceController extends ChangeNotifier {
     notifyListeners();
   }
 
-  String _id(String prefix) => '$prefix-${DateTime.now().microsecondsSinceEpoch}';
+  String _id(String prefix) =>
+      '$prefix-${DateTime.now().microsecondsSinceEpoch}';
+
+  static String _redactSensitiveText(String value) {
+    var result = value.replaceAll(
+      RegExp(
+        r'-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----',
+        caseSensitive: false,
+      ),
+      '[private key redacted by Next]',
+    );
+    final assignment = RegExp(
+      r'''^(\s*["']?(?:api[_-]?key|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key)["']?\s*[:=]\s*)(.+)$''',
+      caseSensitive: false,
+      multiLine: true,
+    );
+    result = result.replaceAllMapped(
+      assignment,
+      (match) => '${match.group(1)}[redacted by Next]',
+    );
+    result = result.replaceAll(
+      RegExp(
+        r'\bBearer\s+[A-Za-z0-9._~+\-/]+=*',
+        caseSensitive: false,
+      ),
+      'Bearer [redacted by Next]',
+    );
+    return result;
+  }
 
   static String _clip(String value) {
     if (value.length <= _maxAnalysisChars) return value;
@@ -415,7 +667,9 @@ class WorkspaceController extends ChangeNotifier {
 
   static String _sizeLabel(int bytes) {
     if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 }
