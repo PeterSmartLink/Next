@@ -121,15 +121,22 @@ class NextOwnerApi {
     );
     if (local != null) return local;
 
-    final referencesWorkspace = _referencesWorkspace(normalized);
+    final comparesWorkspace = RegExp(
+      r'\bcompare (?:these|both|the two|the visible|the open)\b|\bcompare.*on screen\b',
+    ).hasMatch(normalized);
+    final referencesWorkspace = comparesWorkspace || _referencesWorkspace(normalized);
     final workspaceContext = referencesWorkspace
-        ? WorkspaceController.instance.activeAnalysisContext()
+        ? (comparesWorkspace
+            ? WorkspaceController.instance.comparisonAnalysisContext()
+            : WorkspaceController.instance.activeAnalysisContext())
         : null;
     if (referencesWorkspace &&
-        WorkspaceController.instance.isOpen &&
+        (comparesWorkspace || WorkspaceController.instance.isOpen) &&
         workspaceContext == null) {
       return NextChatReply(
-        answer: 'I can see the open workspace, but that view has not exposed readable text for analysis yet.',
+        answer: comparesWorkspace
+            ? 'Show two readable documents together first. I need text from both before I can compare them.'
+            : 'That view has not exposed readable text for analysis yet.',
         conversationId: conversationId,
         tool: 'workspace_context_unavailable',
       );

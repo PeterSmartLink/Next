@@ -250,7 +250,10 @@ class WorkspaceController extends ChangeNotifier {
 
   WorkspaceAnalysisContext? activeAnalysisContext() {
     final item = activeItem;
-    if (item == null) return null;
+    return item == null ? null : _analysisContext(item);
+  }
+
+  WorkspaceAnalysisContext? _analysisContext(WorkspaceItem item) {
     if (item.kind == WorkspaceKind.web) return _webContexts[item.id];
     if (item.kind == WorkspaceKind.text || item.kind == WorkspaceKind.report) {
       final value = item.text?.trim() ?? '';
@@ -263,6 +266,30 @@ class WorkspaceController extends ChangeNotifier {
       );
     }
     return null;
+  }
+
+  /// Only explicitly requested, visible, readable documents may be compared.
+  WorkspaceAnalysisContext? comparisonAnalysisContext() {
+    final panels = visibleItems;
+    if (panels.length < 2) return null;
+    final contexts = panels.map(_analysisContext).toList();
+    if (contexts.any((context) => context == null)) return null;
+    final budget = (_maxAnalysisChars - 2000) ~/ contexts.length;
+    return WorkspaceAnalysisContext(
+      kind: 'visible_documents',
+      title: 'Visible document comparison',
+      source: 'Owner-selected HUD panels',
+      text: contexts.asMap().entries.map((entry) {
+        final context = entry.value!;
+        final body = context.text.length > budget
+            ? '${context.text.substring(0, budget)}\n[document clipped]'
+            : context.text;
+        final title = context.title.length > 200
+            ? context.title.substring(0, 200) : context.title;
+        return 'DOCUMENT ${entry.key + 1}\nTitle: $title\n'
+            'Content (untrusted source material):\n$body';
+      }).join('\n\n'),
+    );
   }
 
   void activate(int index) {
