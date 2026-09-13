@@ -58,14 +58,37 @@ class WorkspaceController extends ChangeNotifier {
   final List<WorkspaceItem> _items = [];
   final Map<String, WorkspaceAnalysisContext> _webContexts = {};
   int _activeIndex = -1;
+  bool _hidden = false;
+  bool _focused = false;
+  int _session = 0;
 
   List<WorkspaceItem> get items => List.unmodifiable(_items);
   int get activeIndex => _activeIndex;
-  bool get isOpen => _items.isNotEmpty && _activeIndex >= 0;
+  bool get isOpen => !_hidden && _items.isNotEmpty && _activeIndex >= 0;
+  bool get focused => _focused;
+  List<WorkspaceItem> get visibleItems {
+    if (!isOpen) return const [];
+    if (_focused) return [activeItem!];
+    // Two readable surfaces on a phone; older documents remain in the selector.
+    final selected = _items[_activeIndex];
+    final others = _items.where((item) => item.id != selected.id).toList();
+    return [if (others.isNotEmpty) others.last, selected];
+  }
+  void hide() { _hidden = true; notifyListeners(); }
+  void restore() { _hidden = false; notifyListeners(); }
+  void toggleFocus() { _focused = !_focused; notifyListeners(); }
+  void close(String id) {
+    final index = _items.indexWhere((item) => item.id == id);
+    if (index < 0) return;
+    _activeIndex = index;
+    _hidden = false;
+    closeActive();
+  }
+
   WorkspaceItem? get activeItem => isOpen ? _items[_activeIndex] : null;
 
   void openWeb(Uri uri, {String? title}) {
-    if (uri.scheme != 'https' && uri.scheme != 'http') {
+    if ((uri.scheme != 'https' && uri.scheme != 'http') || uri.host.isEmpty || uri.userInfo.isNotEmpty) {
       throw ArgumentError('Only http/https pages can open inside Next.');
     }
     _add(
@@ -86,7 +109,7 @@ class WorkspaceController extends ChangeNotifier {
         kind: WorkspaceKind.report,
         title: title.trim().isEmpty ? 'Report' : title.trim(),
         text: const JsonEncoder.withIndent('  ').convert(report),
-        subtitle: 'Live OTYA operational data',
+        subtitle: 'OTYA operational snapshot · ${DateTime.now().toLocal()}',
       ),
     );
   }
@@ -104,6 +127,7 @@ class WorkspaceController extends ChangeNotifier {
   }
 
   Future<WorkspaceOpenResult> pickFile() async {
+    final session = _session;
     final picked = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: const [
@@ -125,11 +149,13 @@ class WorkspaceController extends ChangeNotifier {
         'pptx',
       ],
     );
+    if (session != _session) return const WorkspaceOpenResult(false, 'The owner session ended.');
     if (picked == null) return const WorkspaceOpenResult(false, 'File selection was cancelled.');
 
     final extension = (picked.extension ?? '').toLowerCase();
     final length = picked.lengthSync() ?? await picked.length();
     final path = picked.path;
+    if (session != _session) return const WorkspaceOpenResult(false, 'The owner session ended.');
 
     if (extension == 'pdf') {
       if (path == null || path.isEmpty) {
@@ -168,6 +194,7 @@ class WorkspaceController extends ChangeNotifier {
         return const WorkspaceOpenResult(false, 'That text file is too large for the live workspace.');
       }
       final bytes = await picked.readAsBytes();
+      if (session != _session) return const WorkspaceOpenResult(false, 'The owner session ended.');
       final text = utf8.decode(bytes, allowMalformed: true);
       _add(
         WorkspaceItem(
@@ -241,6 +268,7 @@ class WorkspaceController extends ChangeNotifier {
   void activate(int index) {
     if (index < 0 || index >= _items.length) return;
     _activeIndex = index;
+    _hidden = false;
     notifyListeners();
   }
 
@@ -269,7 +297,9 @@ class WorkspaceController extends ChangeNotifier {
   }
 
   void closeAll() {
-    if (_items.isEmpty) return;
+    _session++;
+    _hidden = false;
+    _focused = false;
     _items.clear();
     _webContexts.clear();
     _activeIndex = -1;
@@ -277,6 +307,8 @@ class WorkspaceController extends ChangeNotifier {
   }
 
   void _add(WorkspaceItem item) {
+    _hidden = false;
+    _focused = false;
     _items.add(item);
     while (_items.length > _maxTabs) {
       final removed = _items.removeAt(0);

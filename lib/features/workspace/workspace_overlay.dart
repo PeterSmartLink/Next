@@ -56,7 +56,7 @@ class WorkspacePanel extends StatelessWidget {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
         child: Material(
-          color: scheme.surface.withValues(alpha: 0.90),
+          color: scheme.surface.withValues(alpha: 0.82),
           elevation: 16,
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -67,7 +67,28 @@ class WorkspacePanel extends StatelessWidget {
               children: [
                 _WorkspaceHeader(controller: controller),
                 const Divider(height: 1),
-                Expanded(child: _WorkspaceBody(item: item)),
+                Expanded(child: LayoutBuilder(builder: (context, constraints) {
+                  final panels = controller.visibleItems;
+                  final horizontal = constraints.maxWidth >= 700;
+                  return Flex(
+                    direction: horizontal ? Axis.horizontal : Axis.vertical,
+                    children: [
+                      for (final panel in panels)
+                        Expanded(key: ValueKey(panel.id), child: Column(children: [
+                          Row(children: [
+                            Expanded(child: TextButton(
+                              onPressed: () => controller.activate(controller.items.indexOf(panel)),
+                              child: Text(panel.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            )),
+                            IconButton(tooltip: 'Close ${panel.title}',
+                              onPressed: () => controller.close(panel.id),
+                              icon: const Icon(Icons.close, size: 20)),
+                          ]),
+                          Expanded(child: _WorkspaceBody(item: panel)),
+                        ])),
+                    ],
+                  );
+                })),
               ],
             ),
           ),
@@ -119,11 +140,14 @@ class _WorkspaceHeader extends StatelessWidget {
             ),
           ),
           IconButton(
-            tooltip: 'Open file',
-            onPressed: () async {
-              await controller.pickFile();
-            },
-            icon: const Icon(Icons.folder_open_outlined),
+            tooltip: controller.focused ? 'Show together' : 'Enlarge selected',
+            onPressed: controller.toggleFocus,
+            icon: Icon(controller.focused ? Icons.view_agenda_outlined : Icons.open_in_full),
+          ),
+          IconButton(
+            tooltip: 'Hide panels',
+            onPressed: controller.hide,
+            icon: const Icon(Icons.visibility_off_outlined),
           ),
           IconButton(
             tooltip: 'Close current',

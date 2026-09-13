@@ -75,6 +75,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _listening = false;
   bool _speaking = false;
   bool _autoVoice = true;
+  bool _foreground = true;
+  bool _showTranscript = false;
+  bool _showTools = false;
   double _voiceLevel = 0;
 
   String _voiceState = 'opening';
@@ -116,9 +119,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
     if (state == AppLifecycleState.resumed && _autoVoice && !_chatBusy && !_speaking) {
       _scheduleListen(const Duration(milliseconds: 500));
-    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+    } else if (!_foreground) {
+      _listening = false;
+      _voiceLevel = 0;
       _listenRestart?.cancel();
       unawaited(NextPlatformBridge.stopVoiceListening());
     }
@@ -257,11 +263,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _startListening() async {
-    if (!mounted || !_autoVoice || _chatBusy || _approvalBusy || _speaking || _listening) return;
+    if (!mounted || !_foreground || !_autoVoice || _chatBusy || _approvalBusy || _speaking || _listening) return;
     _listenRestart?.cancel();
     try {
       await NextPlatformBridge.startVoiceListening();
-      if (!mounted) return;
+      if (!mounted || !_foreground) {
+        await NextPlatformBridge.stopVoiceListening();
+        return;
+      }
       setState(() {
         _voiceState = 'listening';
         _listening = true;
@@ -291,7 +300,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _scheduleListen(Duration delay) {
-    if (!_autoVoice || _chatBusy || _approvalBusy || _speaking || !mounted) return;
+    if (!_foreground || !_autoVoice || _chatBusy || _approvalBusy || _speaking || !mounted) return;
     _listenRestart?.cancel();
     _listenRestart = Timer(delay, _startListening);
   }
@@ -329,15 +338,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _handleUtterance(String text) async {
     final workspaceRequest = text.trim().toLowerCase().replaceAll(RegExp(r'[.!?]+$'), '');
+    if (const {'clear the screen', 'clear screen', 'hide panels', 'hide everything',
+      'show panels', 'restore panels', 'show together', 'enlarge this',
+      'show transcript', 'hide transcript'}.contains(workspaceRequest)) {
+      switch (workspaceRequest) {
+        case 'show panels':
+        case 'restore panels': _workspace.restore();
+        case 'show together':
+          _workspace.restore();
+          if (_workspace.focused) _workspace.toggleFocus();
+        case 'enlarge this':
+          if (!_workspace.focused) _workspace.toggleFocus();
+        case 'show transcript': setState(() => _showTranscript = true);
+        case 'hide transcript': setState(() => _showTranscript = false);
+        default:
+          _workspace.hide();
+          setState(() { _showTranscript = false; _showTools = false; });
+      }
+      _scheduleListen(const Duration(milliseconds: 350));
+      return;
+    }
     if (workspaceRequest == 'open file' || workspaceRequest == 'open a file') {
       await _stopListening();
       await _openFile();
       _scheduleListen(const Duration(milliseconds: 500));
-      return;
-    }
-    if (workspaceRequest == 'show system report' && _report != null) {
-      _workspace.openReport('System report', _report!);
-      _scheduleListen(const Duration(milliseconds: 350));
       return;
     }
     if (_workspace.isOpen && const {'next tab', 'previous tab', 'close current tab', 'close workspace'}.contains(workspaceRequest)) {
@@ -428,6 +452,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       });
 
+      // Present the actual server answer only when the owner asks to see it.
+      // A requested time range is never synthesized from the current snapshot.
+      if (!reply.approvalRequired &&
+          RegExp(r'^(?:please )?(?:show|display|bring up)\b', caseSensitive: false).hasMatch(request) &&
+          !(reply.tool?.startsWith('workspace_') ?? false)) {
+        _workspace.openText(
+          title: request.length > 80 ? '${request.substring(0, 80)}…' : request,
+          text: reply.answer,
+          subtitle: 'Next response · ${DateTime.now().toLocal()}',
+        );
+      }
+
       _pushEvent(
         reply.tool == null ? 'Next answered.' : 'Next used ${reply.tool!.replaceAll('_', ' ')}.',
         severity: _HudSeverity.info,
@@ -436,8 +472,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (_toolRefreshesPulse(reply.tool)) unawaited(_loadPulse(silent: true));
 
       try {
+        if (!_foreground) return;
+        setState(() => _speaking = true);
         await NextPlatformBridge.speak(reply.answer);
-        if (mounted) setState(() => _speaking = true);
       } catch (_) {
         if (mounted) {
           setState(() {
@@ -539,7 +576,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         Expanded(flex: 3, child: WorkspacePanel(controller: _workspace)),
                     ]),
                   ),
-                  Wrap(alignment: WrapAlignment.center, spacing: 4, children: [
+                  Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    IconButton(tooltip: 'Show controls', onPressed: () => setState(() => _showTools = !_showTools),
+                      icon: const Icon(Icons.add_circle_outline)),
+                    IconButton(tooltip: 'Toggle transcript', onPressed: () => setState(() => _showTranscript = !_showTranscript),
+                      icon: const Icon(Icons.closed_caption_outlined)),
+                    if (!_workspace.isOpen && _workspace.items.isNotEmpty)
+                      IconButton(tooltip: 'Restore panels', onPressed: _workspace.restore,
+                        icon: const Icon(Icons.layers_outlined)),
+                  ]),
+                  if (_showTools) Wrap(alignment: WrapAlignment.center, spacing: 4, children: [
                     TextButton.icon(onPressed: _openFile, icon: const Icon(Icons.folder_open_outlined), label: const Text('File')),
                     TextButton.icon(onPressed: _openWeb, icon: const Icon(Icons.public), label: const Text('Web')),
                     TextButton.icon(onPressed: _report == null ? null : () => _workspace.openReport('System report', _report!),
@@ -547,7 +593,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     if (_workspace.isOpen) IconButton(tooltip: 'Close workspace', onPressed: _workspace.closeAll,
                       icon: const Icon(Icons.close_fullscreen)),
                   ]),
-                  if (!_checkingAssistant && _assistantAvailable && !_assistantHeld)
+                  if (_showTools && !_checkingAssistant && _assistantAvailable && !_assistantHeld)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: _GlassPanel(
@@ -576,7 +622,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         onCancel: _cancelPending,
                       ),
                     ),
-                  _LiveTranscriptHud(
+                  if (_showTranscript || _hudError.isNotEmpty) _LiveTranscriptHud(
                     heard: _heard,
                     answer: _nextText,
                     error: _hudError,
@@ -584,7 +630,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     speaking: _speaking,
                     thinking: _chatBusy,
                   ),
-                  if (_events.isNotEmpty) ...[
+                  if (_showTools && _events.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     _EventStrip(events: _events),
                   ],
