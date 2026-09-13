@@ -7,6 +7,7 @@ void main() {
     final overlay = File('lib/features/workspace/workspace_overlay.dart').readAsStringSync();
     final controller = File('lib/features/workspace/workspace_controller.dart').readAsStringSync();
     final office = File('lib/features/workspace/office_text_extractor.dart').readAsStringSync();
+    final pdf = File('lib/features/workspace/pdf_text_extractor.dart').readAsStringSync();
     final api = File('lib/core/network/next_owner_api.dart').readAsStringSync();
 
     expect(overlay, contains('WebViewWidget'));
@@ -19,6 +20,8 @@ void main() {
     expect(controller, contains("'xlsx'"));
     expect(controller, contains("'pptx'"));
     expect(controller, contains('OfficeTextExtractor.extract'));
+    expect(controller, contains('PdfTextExtractor.extract'));
+    expect(controller, contains("WorkspaceKind.pdf => 'local_pdf_text'"));
     expect(controller, contains('local private preview'));
     expect(controller, contains('Nothing was uploaded to a document viewer'));
     expect(controller, isNot(contains('docs.google.com')));
@@ -29,6 +32,11 @@ void main() {
     expect(office, contains('ppt/slides/slide'));
     expect(office, contains('xl/worksheets/sheet'));
     expect(office, contains('maxExpandedBytes'));
+
+    expect(pdf, contains('pdfrxFlutterInitialize'));
+    expect(pdf, contains('PdfDocument.openFile'));
+    expect(pdf, contains('page.loadText()'));
+    expect(pdf, contains('await document.dispose()'));
 
     expect(api, contains("tool: 'workspace_file'"));
     expect(api, contains("tool: 'workspace_report'"));
