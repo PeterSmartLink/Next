@@ -3,9 +3,10 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('workspace supports same-screen web, PDF, image, text and report surfaces', () {
+  test('workspace supports same-screen web, PDF, image, text, report and private Office surfaces', () {
     final overlay = File('lib/features/workspace/workspace_overlay.dart').readAsStringSync();
     final controller = File('lib/features/workspace/workspace_controller.dart').readAsStringSync();
+    final office = File('lib/features/workspace/office_text_extractor.dart').readAsStringSync();
     final api = File('lib/core/network/next_owner_api.dart').readAsStringSync();
 
     expect(overlay, contains('WebViewWidget'));
@@ -17,8 +18,17 @@ void main() {
     expect(controller, contains("'docx'"));
     expect(controller, contains("'xlsx'"));
     expect(controller, contains("'pptx'"));
-    expect(controller, contains('will not upload it to a public document viewer'));
+    expect(controller, contains('OfficeTextExtractor.extract'));
+    expect(controller, contains('local private preview'));
+    expect(controller, contains('Nothing was uploaded to a document viewer'));
+    expect(controller, isNot(contains('docs.google.com')));
+    expect(controller, isNot(contains('view.officeapps.live.com')));
     expect(controller, contains('_maxTabs = 6'));
+
+    expect(office, contains('word/document.xml'));
+    expect(office, contains('ppt/slides/slide'));
+    expect(office, contains('xl/worksheets/sheet'));
+    expect(office, contains('maxExpandedBytes'));
 
     expect(api, contains("tool: 'workspace_file'"));
     expect(api, contains("tool: 'workspace_report'"));
