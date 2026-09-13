@@ -42,6 +42,7 @@ class NextOwnerApi {
 
   final OwnerAuthService _auth;
   final Dio _dio;
+  Map<String, dynamic>? _pendingOwnerAction;
 
   static const Map<String, ({String label, String packageName})> _localApps = {
     'whatsapp': (label: 'WhatsApp', packageName: 'com.whatsapp'),
@@ -81,6 +82,38 @@ class NextOwnerApi {
     String message, {
     String? conversationId,
   }) async {
+    final normalized = _normalizeCommand(message);
+    if (_isApprovalIntent(normalized)) {
+      final pending = _pendingOwnerAction;
+      if (pending == null) {
+        return NextChatReply(
+          answer: 'There is no action currently displayed on this phone to approve.',
+          conversationId: conversationId,
+          tool: 'owner_action_guard',
+        );
+      }
+      return _completeOwnerAction(
+        pending,
+        approve: true,
+        conversationId: conversationId,
+      );
+    }
+    if (_isCancellationIntent(normalized)) {
+      final pending = _pendingOwnerAction;
+      if (pending == null) {
+        return NextChatReply(
+          answer: 'There is no pending owner action on this phone to cancel.',
+          conversationId: conversationId,
+          tool: 'owner_action_guard',
+        );
+      }
+      return _completeOwnerAction(
+        pending,
+        approve: false,
+        conversationId: conversationId,
+      );
+    }
+
     final local = await _tryLocalDeviceCommand(
       message,
       conversationId: conversationId,
@@ -102,12 +135,13 @@ class NextOwnerApi {
       throw StateError('Next returned an incomplete response.');
     }
 
-    final rawAction = data['action'];
-    final action = rawAction is Map<String, dynamic>
-        ? rawAction
-        : rawAction is Map
-            ? Map<String, dynamic>.from(rawAction)
-            : null;
+    final action = _actionMap(data['action']);
+    final approvalRequired = data['approval_required'] == true;
+    if (approvalRequired && action != null) {
+      _pendingOwnerAction = Map<String, dynamic>.from(action);
+    } else if (action != null && _isTerminalAction(action)) {
+      _clearMatchingPending(action);
+    }
 
     return NextChatReply(
       answer: answer.trim(),
@@ -115,20 +149,110 @@ class NextOwnerApi {
           ? data['conversation_id'] as String
           : conversationId,
       tool: data['tool'] is String ? data['tool'] as String : null,
-      approvalRequired: data['approval_required'] == true,
+      approvalRequired: approvalRequired,
       action: action,
     );
+  }
+
+  String _normalizeCommand(String message) {
+    return message
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[.!?]+$'), '')
+        .replaceAll(RegExp(r'\s+'), ' ');
+  }
+
+  bool _isApprovalIntent(String normalized) {
+    return RegExp(
+      r'^(approve|approve it|yes approve|yes, approve|go ahead|send it|post it|publish it|do it|confirm|confirm it)$',
+    ).hasMatch(normalized);
+  }
+
+  bool _isCancellationIntent(String normalized) {
+    return RegExp(
+      r"^(cancel|cancel it|stop|don't send it|do not send it|don't post it|do not post it)$",
+    ).hasMatch(normalized);
+  }
+
+  Future<NextChatReply> _completeOwnerAction(
+    Map<String, dynamic> pending, {
+    required bool approve,
+    String? conversationId,
+  }) async {
+    final id = pending['id']?.toString().trim() ?? '';
+    final token = pending['approval_token']?.toString().trim() ?? '';
+    if (id.isEmpty || (approve && token.isEmpty)) {
+      _pendingOwnerAction = null;
+      return NextChatReply(
+        answer: 'That approval is no longer valid. Ask Next to prepare the action again.',
+        conversationId: conversationId,
+        tool: 'owner_action_guard',
+      );
+    }
+
+    final response = await _dio.post<dynamic>(
+      approve
+          ? '/api/owner/ai/action/approve'
+          : '/api/owner/ai/action/cancel',
+      data: {
+        'id': id,
+        if (approve) 'approval_token': token,
+      },
+      options: Options(headers: await _auth.ownerHeaders()),
+    );
+    final data = _requireMap(response);
+    final action = _actionMap(data['action']);
+    if (action != null) _clearMatchingPending(action);
+
+    final summary = (action?['summary'] ?? pending['summary'] ?? 'The owner action')
+        .toString()
+        .trim();
+    final status = action?['status']?.toString().trim() ?? '';
+    final answer = approve
+        ? status == 'completed'
+            ? 'Done. $summary was executed and verified.'
+            : '$summary returned status ${status.isEmpty ? 'unknown' : status}.'
+        : status == 'cancelled' || status == 'not_found'
+            ? 'Cancelled. $summary will not be executed.'
+            : 'The cancellation returned status ${status.isEmpty ? 'unknown' : status}.';
+
+    return NextChatReply(
+      answer: answer,
+      conversationId: conversationId,
+      tool: approve ? 'owner_action_approve' : 'owner_action_cancel',
+      action: action,
+    );
+  }
+
+  Map<String, dynamic>? _actionMap(dynamic raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    return null;
+  }
+
+  bool _isTerminalAction(Map<String, dynamic> action) {
+    final status = action['status']?.toString();
+    return status == 'completed' ||
+        status == 'cancelled' ||
+        status == 'failed' ||
+        status == 'not_found';
+  }
+
+  void _clearMatchingPending(Map<String, dynamic> action) {
+    final current = _pendingOwnerAction;
+    if (current == null) return;
+    final currentId = current['id']?.toString();
+    final actionId = action['id']?.toString();
+    if (currentId == null || actionId == null || currentId == actionId) {
+      _pendingOwnerAction = null;
+    }
   }
 
   Future<NextChatReply?> _tryLocalDeviceCommand(
     String message, {
     String? conversationId,
   }) async {
-    final normalized = message
-        .trim()
-        .toLowerCase()
-        .replaceAll(RegExp(r'[.!?]+$'), '')
-        .replaceAll(RegExp(r'\s+'), ' ');
+    final normalized = _normalizeCommand(message);
 
     final openMatch = RegExp(r'^(?:please )?open (.+?)(?: app)?$').firstMatch(normalized);
     if (openMatch != null) {
