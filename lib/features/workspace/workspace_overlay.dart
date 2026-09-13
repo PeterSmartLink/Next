@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 
@@ -142,7 +144,11 @@ class _WorkspaceBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return switch (item.kind) {
-      WorkspaceKind.web => _WebPane(key: ValueKey(item.id), uri: item.uri!),
+      WorkspaceKind.web => _WebPane(
+          key: ValueKey(item.id),
+          itemId: item.id,
+          uri: item.uri!,
+        ),
       WorkspaceKind.pdf => _PdfPane(path: item.path!),
       WorkspaceKind.image => _ImagePane(path: item.path!),
       WorkspaceKind.text || WorkspaceKind.report => _TextPane(item: item),
@@ -152,8 +158,13 @@ class _WorkspaceBody extends StatelessWidget {
 }
 
 class _WebPane extends StatefulWidget {
-  const _WebPane({super.key, required this.uri});
+  const _WebPane({
+    super.key,
+    required this.itemId,
+    required this.uri,
+  });
 
+  final String itemId;
   final Uri uri;
 
   @override
@@ -189,6 +200,7 @@ class _WebPaneState extends State<_WebPane> {
               _loading = false;
               _host = uri?.host ?? _host;
             });
+            unawaited(_capturePageContext(url));
           },
           onNavigationRequest: (request) {
             final uri = Uri.tryParse(request.url);
@@ -200,6 +212,37 @@ class _WebPaneState extends State<_WebPane> {
         ),
       )
       ..loadRequest(widget.uri);
+  }
+
+  Future<void> _capturePageContext(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http')) return;
+    try {
+      final titleValue = await _controller.runJavaScriptReturningResult(
+        'document.title || ""',
+      );
+      final textValue = await _controller.runJavaScriptReturningResult(
+        'document.body ? document.body.innerText : ""',
+      );
+      WorkspaceController.instance.updateWebContext(
+        itemId: widget.itemId,
+        uri: uri,
+        title: _decodeJavaScriptString(titleValue),
+        text: _decodeJavaScriptString(textValue),
+      );
+    } catch (_) {
+      // Some pages disallow extraction. Browsing remains available; Next simply
+      // refuses to claim it can analyze page content it could not read.
+    }
+  }
+
+  String _decodeJavaScriptString(Object value) {
+    final raw = value.toString();
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is String) return decoded;
+    } catch (_) {}
+    return raw;
   }
 
   @override
