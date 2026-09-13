@@ -12,13 +12,13 @@ void main() {
 
     expect(auth, contains("scheme: 'tg'"));
     expect(auth, contains("'domain': 'OtyaPlayerBot'"));
-    expect(auth, contains("'start': 'owner_\$value'"));
+    expect(auth, contains(r"'start': 'owner_$value'"));
     expect(auth, isNot(contains('/api/auth/telegram/start')));
     expect(auth, contains('telegram_challenge'));
 
     expect(activity, contains('isAllowedTelegramOwnerLink'));
     expect(activity, contains('setPackage("org.telegram.messenger")'));
-    expect(activity, contains('Regex("^owner_[A-Za-z0-9_-]{16,80}\\$")'));
+    expect(activity, contains(r'Regex("^owner_[A-Za-z0-9_-]{16,80}$")'));
 
     expect(gate, contains('_telegramChallenge'));
     expect(gate, contains('No browser sign-in is required for this step.'));
