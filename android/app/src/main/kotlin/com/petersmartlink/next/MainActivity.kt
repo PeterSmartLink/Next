@@ -334,18 +334,40 @@ class MainActivity : FlutterFragmentActivity() {
         result.success(null)
     }
 
+    private fun isAllowedTelegramOwnerLink(uri: Uri): Boolean {
+        if (!uri.scheme.equals("tg", ignoreCase = true)) return false
+        if (!uri.host.equals("resolve", ignoreCase = true)) return false
+        val domain = uri.getQueryParameter("domain") ?: return false
+        val start = uri.getQueryParameter("start") ?: return false
+        return domain.equals("OtyaPlayerBot", ignoreCase = true) &&
+            Regex("^owner_[A-Za-z0-9_-]{16,80}$").matches(start)
+    }
+
     private fun openUrl(rawUrl: String, result: MethodChannel.Result) {
         val uri = runCatching { Uri.parse(rawUrl) }.getOrNull()
-        val scheme = uri?.scheme?.lowercase()
-        if (uri == null || (scheme != "https" && scheme != "http")) {
-            result.error("blocked_url", "Only verified web links can be opened from this bridge.", null)
+        if (uri == null) {
+            result.error("blocked_url", "This link is invalid.", null)
             return
         }
+
+        val scheme = uri.scheme?.lowercase()
+        val isWeb = scheme == "https" || scheme == "http"
+        val isTelegramOwnerLink = isAllowedTelegramOwnerLink(uri)
+        if (!isWeb && !isTelegramOwnerLink) {
+            result.error("blocked_url", "This external link is not allowed from Next.", null)
+            return
+        }
+
         val intent = Intent(Intent.ACTION_VIEW, uri).apply {
             addCategory(Intent.CATEGORY_BROWSABLE)
+            if (isTelegramOwnerLink) setPackage("org.telegram.messenger")
         }
         if (intent.resolveActivity(packageManager) == null) {
-            result.error("not_found", "No app can open this link.", null)
+            result.error(
+                "not_found",
+                if (isTelegramOwnerLink) "Install Telegram to finish trusted-phone enrollment." else "No app can open this link.",
+                null,
+            )
             return
         }
         startActivity(intent)
