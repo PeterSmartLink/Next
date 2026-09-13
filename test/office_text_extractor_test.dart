@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -61,7 +62,7 @@ void main() {
   });
 }
 
-List<int> _zip(Map<String, String> files) {
+Uint8List _zip(Map<String, String> files) {
   final archive = Archive();
   for (final entry in files.entries) {
     archive.addFile(ArchiveFile.bytes(entry.key, utf8.encode(entry.value)));
