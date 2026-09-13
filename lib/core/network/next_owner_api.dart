@@ -121,12 +121,33 @@ class NextOwnerApi {
     );
     if (local != null) return local;
 
+    final referencesWorkspace = _referencesWorkspace(normalized);
+    final workspaceContext = referencesWorkspace
+        ? WorkspaceController.instance.activeAnalysisContext()
+        : null;
+    if (referencesWorkspace &&
+        WorkspaceController.instance.isOpen &&
+        workspaceContext == null) {
+      return NextChatReply(
+        answer: 'I can see the open workspace, but that view has not exposed readable text for analysis yet.',
+        conversationId: conversationId,
+        tool: 'workspace_context_unavailable',
+      );
+    }
+
     final response = await _dio.post<dynamic>(
       '/api/owner/ai/chat',
       data: {
         'message': message,
         if (conversationId != null && conversationId.isNotEmpty)
           'conversation_id': conversationId,
+        if (workspaceContext != null)
+          'workspace_context': {
+            'kind': workspaceContext.kind,
+            'title': workspaceContext.title,
+            'source': workspaceContext.source,
+            'text': workspaceContext.text,
+          },
       },
       options: Options(headers: await _auth.ownerHeaders()),
     );
@@ -173,6 +194,14 @@ class NextOwnerApi {
     return RegExp(
       r"^(cancel|cancel it|stop|don't send it|do not send it|don't post it|do not post it)$",
     ).hasMatch(normalized);
+  }
+
+  bool _referencesWorkspace(String normalized) {
+    return RegExp(
+      r'\b(this page|this article|this file|this document|this report|what i am looking at|what i\x27m looking at|on screen)\b',
+    ).hasMatch(normalized) ||
+        RegExp(r'^(analyze|analyse|summarize|summarise|explain|review) this$')
+            .hasMatch(normalized);
   }
 
   Future<NextChatReply> _completeOwnerAction(
