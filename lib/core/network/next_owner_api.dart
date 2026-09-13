@@ -220,7 +220,7 @@ class NextOwnerApi {
 
   bool _referencesWorkspace(String normalized) {
     return RegExp(
-      r'\b(this page|this article|this file|this document|this report|what i am looking at|what i\x27m looking at|on screen)\b',
+      r'\b(this page|this article|this file|this document|this report|this image|this photo|this picture|this screenshot|what i am looking at|what i\x27m looking at|on screen)\b',
     ).hasMatch(normalized) ||
         RegExp(r'^(analyze|analyse|summarize|summarise|explain|review) this$')
             .hasMatch(normalized);
