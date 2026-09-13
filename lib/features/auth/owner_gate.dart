@@ -25,6 +25,7 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
   bool _needsSecondFactor = false;
   bool _useRecoveryCode = false;
   bool _telegramLaunchStarted = false;
+  String? _telegramChallenge;
   String _error = '';
   String _notice = '';
 
@@ -120,6 +121,8 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
       _busy = true;
       _error = '';
       _notice = '';
+      _telegramChallenge = null;
+      _telegramLaunchStarted = false;
     });
     try {
       await _auth.startOwnerVerification();
@@ -143,38 +146,47 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
       _notice = '';
     });
     try {
-      await _auth.verifyOwnerOtp(code);
+      final challenge = await _auth.verifyOwnerOtp(code);
       _otp.clear();
       if (!mounted) return;
       setState(() {
+        _telegramChallenge = challenge;
         _stage = _OwnerStage.ownerTelegram;
         _busy = true;
         _telegramLaunchStarted = true;
-        _notice = 'Email confirmed. Verify your linked Telegram identity once, then return to Next.';
+        _notice = 'Email confirmed. Telegram will open @OtyaPlayerBot directly. Tap Start there, then return to Next.';
       });
-      await _auth.startTelegramOwnerVerification();
+      await _auth.startTelegramOwnerVerification(challenge);
       if (mounted) setState(() => _busy = false);
     } on OwnerAuthException catch (e) {
       _showError(e.message);
     } catch (_) {
-      _showError('Telegram verification could not start. Try again.');
+      _showError('Telegram verification could not start. Make sure Telegram is installed and try again.');
     }
   }
 
   Future<void> _openTelegramAgain() async {
     if (_busy) return;
+    final challenge = _telegramChallenge;
+    if (challenge == null || challenge.isEmpty) {
+      _setStage(
+        _OwnerStage.ownerStart,
+        notice: 'The Telegram enrollment challenge is no longer available. Start trusted-phone enrollment again.',
+      );
+      return;
+    }
     setState(() {
       _busy = true;
       _error = '';
     });
     try {
       _telegramLaunchStarted = true;
-      await _auth.startTelegramOwnerVerification();
+      await _auth.startTelegramOwnerVerification(challenge);
       if (mounted) setState(() => _busy = false);
     } on OwnerAuthException catch (e) {
       _showError(e.message);
     } catch (_) {
-      _showError('Telegram verification could not start.');
+      _showError('Telegram could not open. Make sure it is installed on this phone.');
     }
   }
 
@@ -186,6 +198,8 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
     });
     try {
       await _auth.completeOwnerVerification();
+      _telegramChallenge = null;
+      _telegramLaunchStarted = false;
       _setStage(
         _OwnerStage.ready,
         notice: 'This phone is now trusted. Normal Next launches will open directly.',
@@ -223,6 +237,7 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
     _needsSecondFactor = false;
     _useRecoveryCode = false;
     _telegramLaunchStarted = false;
+    _telegramChallenge = null;
     _setStage(_OwnerStage.signIn);
   }
 
@@ -237,6 +252,8 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
       return;
     }
     await _auth.clearOwnerGrant();
+    _telegramChallenge = null;
+    _telegramLaunchStarted = false;
     _setStage(
       _OwnerStage.ownerStart,
       notice: 'This phone is no longer trusted for owner controls. Re-verify it to continue.',
@@ -351,7 +368,7 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
       children: [
         const _EnrollmentStep(number: '1', text: 'OTYA account signed in'),
         const _EnrollmentStep(number: '2', text: 'Confirm email code'),
-        const _EnrollmentStep(number: '3', text: 'Confirm linked Telegram identity'),
+        const _EnrollmentStep(number: '3', text: 'Confirm in @OtyaPlayerBot'),
         const SizedBox(height: 16),
         FilledButton.icon(
           onPressed: _busy ? null : _startOwnerUnlock,
@@ -393,9 +410,9 @@ class _OwnerGateState extends State<OwnerGate> with WidgetsBindingObserver {
 
   Widget _buildTelegram() {
     return _Panel(
-      title: 'Confirm your identity',
+      title: 'Confirm in Telegram',
       subtitle:
-          'Finish the linked Telegram check and return to Next. This is for trusted-phone enrollment, not something you repeat every time you open the app.',
+          'Next opens @OtyaPlayerBot directly in the Telegram app with a single-use challenge. Tap Start there and return here. No browser sign-in is required for this step.',
       children: [
         FilledButton.icon(
           onPressed: _busy ? null : () => _completeTelegram(),
