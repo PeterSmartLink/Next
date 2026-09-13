@@ -152,6 +152,47 @@ class NextOwnerApi {
       }
     }
 
+    String? panel;
+    String? panelAnswer;
+    if (RegExp(
+      r'^(?:please )?(?:open )?(?:wifi|wi-fi|internet)(?: settings| controls)?$|^(?:turn|switch) (?:on|off) (?:wifi|wi-fi)$',
+    ).hasMatch(normalized)) {
+      panel = 'internet';
+      panelAnswer = 'Opening Android Internet controls. Confirm the network change there.';
+    } else if (RegExp(
+      r'^(?:please )?(?:open )?bluetooth(?: settings| controls)?$|^(?:turn|switch) (?:on|off) bluetooth$',
+    ).hasMatch(normalized)) {
+      panel = 'bluetooth';
+      panelAnswer = 'Opening Bluetooth settings. Android keeps the final radio change under your control.';
+    } else if (RegExp(
+      r'^(?:please )?(?:open |manage )?(?:next )?notification settings$|^manage next notifications$',
+    ).hasMatch(normalized)) {
+      panel = 'notifications';
+      panelAnswer = 'Opening Next notification settings.';
+    } else if (RegExp(
+      r'^(?:please )?(?:open )?(?:next |app )?settings$|^open next app settings$',
+    ).hasMatch(normalized)) {
+      panel = 'app';
+      panelAnswer = 'Opening Next app settings.';
+    }
+
+    if (panel != null && panelAnswer != null) {
+      try {
+        await NextPlatformBridge.openSystemPanel(panel);
+        return NextChatReply(
+          answer: panelAnswer,
+          conversationId: conversationId,
+          tool: 'device_system_panel',
+        );
+      } catch (_) {
+        return NextChatReply(
+          answer: 'Android could not open that settings control on this phone.',
+          conversationId: conversationId,
+          tool: 'device_system_panel',
+        );
+      }
+    }
+
     final asksDeviceStatus = RegExp(
       r'^(what phone am i on|what phone is this|device status|phone status|tell me about this phone)$',
     ).hasMatch(normalized);
