@@ -9,6 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  archive: ^4.2.0
   cupertino_icons: ^1.0.8
   dio: ^5.11.1
   file_picker: ^12.3.0
@@ -18,6 +19,7 @@ dependencies:
   local_auth: ^3.0.2
   pdfrx: ^2.6.1
   webview_flutter: ^4.14.1
+  xml: ^7.0.1
 
 dev_dependencies:
   flutter_test:
