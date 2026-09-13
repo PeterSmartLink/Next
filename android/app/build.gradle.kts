@@ -1,7 +1,17 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+val hasPrivateReleaseSigning = keystorePropertiesFile.exists()
+if (hasPrivateReleaseSigning) {
+    FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
 }
 
 android {
@@ -23,10 +33,24 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasPrivateReleaseSigning) {
+            create("privateRelease") {
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // Release signing will be replaced by the private Next distribution key.
-            signingConfig = signingConfigs.getByName("debug")
+            // Never silently ship the owner app with Android's shared debug key.
+            // Private release automation provides key.properties for signed builds.
+            if (hasPrivateReleaseSigning) {
+                signingConfig = signingConfigs.getByName("privateRelease")
+            }
         }
     }
 }
