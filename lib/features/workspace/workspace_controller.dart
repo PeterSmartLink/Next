@@ -32,6 +32,20 @@ class WorkspaceOpenResult {
   final String message;
 }
 
+class WorkspaceAnalysisContext {
+  const WorkspaceAnalysisContext({
+    required this.kind,
+    required this.title,
+    required this.source,
+    required this.text,
+  });
+
+  final String kind;
+  final String title;
+  final String source;
+  final String text;
+}
+
 class WorkspaceController extends ChangeNotifier {
   WorkspaceController._();
 
@@ -39,8 +53,10 @@ class WorkspaceController extends ChangeNotifier {
 
   static const int _maxTabs = 6;
   static const int _maxTextBytes = 5 * 1024 * 1024;
+  static const int _maxAnalysisChars = 18000;
 
   final List<WorkspaceItem> _items = [];
+  final Map<String, WorkspaceAnalysisContext> _webContexts = {};
   int _activeIndex = -1;
 
   List<WorkspaceItem> get items => List.unmodifiable(_items);
@@ -185,6 +201,43 @@ class WorkspaceController extends ChangeNotifier {
     return const WorkspaceOpenResult(false, 'That file type is not supported in the live workspace yet.');
   }
 
+  void updateWebContext({
+    required String itemId,
+    required Uri uri,
+    required String title,
+    required String text,
+  }) {
+    if (!_items.any((item) => item.id == itemId && item.kind == WorkspaceKind.web)) return;
+    final cleaned = text.trim();
+    if (cleaned.isEmpty) {
+      _webContexts.remove(itemId);
+      return;
+    }
+    _webContexts[itemId] = WorkspaceAnalysisContext(
+      kind: 'web_page',
+      title: title.trim().isEmpty ? uri.host : title.trim(),
+      source: uri.toString(),
+      text: _clip(cleaned),
+    );
+  }
+
+  WorkspaceAnalysisContext? activeAnalysisContext() {
+    final item = activeItem;
+    if (item == null) return null;
+    if (item.kind == WorkspaceKind.web) return _webContexts[item.id];
+    if (item.kind == WorkspaceKind.text || item.kind == WorkspaceKind.report) {
+      final value = item.text?.trim() ?? '';
+      if (value.isEmpty) return null;
+      return WorkspaceAnalysisContext(
+        kind: item.kind == WorkspaceKind.report ? 'otya_report' : 'local_text_file',
+        title: item.title,
+        source: item.subtitle ?? item.title,
+        text: _clip(value),
+      );
+    }
+    return null;
+  }
+
   void activate(int index) {
     if (index < 0 || index >= _items.length) return;
     _activeIndex = index;
@@ -205,7 +258,8 @@ class WorkspaceController extends ChangeNotifier {
 
   void closeActive() {
     if (!isOpen) return;
-    _items.removeAt(_activeIndex);
+    final removed = _items.removeAt(_activeIndex);
+    _webContexts.remove(removed.id);
     if (_items.isEmpty) {
       _activeIndex = -1;
     } else if (_activeIndex >= _items.length) {
@@ -217,6 +271,7 @@ class WorkspaceController extends ChangeNotifier {
   void closeAll() {
     if (_items.isEmpty) return;
     _items.clear();
+    _webContexts.clear();
     _activeIndex = -1;
     notifyListeners();
   }
@@ -224,13 +279,19 @@ class WorkspaceController extends ChangeNotifier {
   void _add(WorkspaceItem item) {
     _items.add(item);
     while (_items.length > _maxTabs) {
-      _items.removeAt(0);
+      final removed = _items.removeAt(0);
+      _webContexts.remove(removed.id);
     }
     _activeIndex = _items.length - 1;
     notifyListeners();
   }
 
   String _id(String prefix) => '$prefix-${DateTime.now().microsecondsSinceEpoch}';
+
+  static String _clip(String value) {
+    if (value.length <= _maxAnalysisChars) return value;
+    return '${value.substring(0, _maxAnalysisChars)}\n[content clipped by Next]';
+  }
 
   static String _sizeLabel(int bytes) {
     if (bytes < 1024) return '$bytes B';
