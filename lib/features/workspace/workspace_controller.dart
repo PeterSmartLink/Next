@@ -56,6 +56,7 @@ class WorkspaceController extends ChangeNotifier {
 
   static const int _maxTabs = 6;
   static const int _maxTextBytes = 5 * 1024 * 1024;
+  static const int _maxVisionImageBytes = 4 * 1024 * 1024;
   static const int _maxAnalysisChars = 18000;
 
   static const List<String> _workspaceExtensions = [
@@ -237,7 +238,6 @@ class WorkspaceController extends ChangeNotifier {
   List<WorkspaceItem> get visibleItems {
     if (!isOpen) return const [];
     if (_focused) return [activeItem!];
-    // Two readable surfaces on a phone; older documents remain in the selector.
     final selected = _items[_activeIndex];
     final others = _items.where((item) => item.id != selected.id).toList();
     return [if (others.isNotEmpty) others.last, selected];
@@ -346,8 +346,7 @@ class WorkspaceController extends ChangeNotifier {
       try {
         extraction = await PdfTextExtractor.extract(path);
       } catch (_) {
-        // Rendering remains useful even when the PDF is encrypted, malformed,
-        // scanned, or otherwise has no safely extractable text.
+        // Rendering remains useful when embedded text is unavailable.
       }
       if (session != _session) {
         return const WorkspaceOpenResult(false, 'The owner session ended.');
@@ -379,18 +378,31 @@ class WorkspaceController extends ChangeNotifier {
           'Android could not provide a local image path for this file.',
         );
       }
+      String? visionData;
+      if (length <= _maxVisionImageBytes) {
+        final bytes = await picked.readAsBytes();
+        if (session != _session) {
+          return const WorkspaceOpenResult(false, 'The owner session ended.');
+        }
+        visionData = 'data:${_imageMime(extension)};base64,${base64Encode(bytes)}';
+      }
       _add(
         WorkspaceItem(
           id: _id('image'),
           kind: WorkspaceKind.image,
           title: picked.name,
           path: path,
-          subtitle: _sizeLabel(length),
+          text: visionData,
+          subtitle: visionData == null
+              ? '${_sizeLabel(length)} · image · visual-only preview'
+              : '${_sizeLabel(length)} · image · private vision ready',
         ),
       );
       return WorkspaceOpenResult(
         true,
-        'Opened ${picked.name} in the Next workspace.',
+        visionData == null
+            ? 'Opened ${picked.name} locally. It is larger than the private vision limit, so I will only display it.'
+            : 'Opened ${picked.name} locally. It stays on this phone unless you explicitly ask me to analyze this image.',
       );
     }
 
@@ -527,6 +539,16 @@ class WorkspaceController extends ChangeNotifier {
 
   WorkspaceAnalysisContext? _analysisContext(WorkspaceItem item) {
     if (item.kind == WorkspaceKind.web) return _webContexts[item.id];
+    if (item.kind == WorkspaceKind.image) {
+      final value = item.text?.trim() ?? '';
+      if (value.isEmpty) return null;
+      return WorkspaceAnalysisContext(
+        kind: 'local_image',
+        title: item.title,
+        source: item.subtitle ?? 'Local owner image',
+        text: value,
+      );
+    }
     if (item.kind == WorkspaceKind.text ||
         item.kind == WorkspaceKind.report ||
         item.kind == WorkspaceKind.pdf) {
@@ -552,12 +574,12 @@ class WorkspaceController extends ChangeNotifier {
     return null;
   }
 
-  /// Only explicitly requested, visible, readable documents may be compared.
   WorkspaceAnalysisContext? comparisonAnalysisContext() {
     final panels = visibleItems;
     if (panels.length < 2) return null;
     final contexts = panels.map(_analysisContext).toList();
     if (contexts.any((context) => context == null)) return null;
+    if (contexts.any((context) => context!.kind == 'local_image')) return null;
     final budget = (_maxAnalysisChars - 2000) ~/ contexts.length;
     return WorkspaceAnalysisContext(
       kind: 'visible_documents',
@@ -658,6 +680,14 @@ class WorkspaceController extends ChangeNotifier {
       'Bearer [redacted by Next]',
     );
     return result;
+  }
+
+  static String _imageMime(String extension) {
+    return switch (extension) {
+      'png' => 'image/png',
+      'webp' => 'image/webp',
+      _ => 'image/jpeg',
+    };
   }
 
   static String _clip(String value) {
