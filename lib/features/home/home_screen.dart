@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import '../../core/network/next_owner_api.dart';
 import '../../core/platform/next_platform_bridge.dart';
 import '../../core/security/owner_biometric.dart';
+import '../workspace/workspace_controller.dart';
+import '../workspace/workspace_overlay.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -28,6 +30,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   StreamSubscription<Map<String, dynamic>>? _voiceSubscription;
   Timer? _listenRestart;
   Timer? _pulseTimer;
+  final _workspace = WorkspaceController.instance;
+
+  void _workspaceChanged() { if (mounted) setState(() {}); }
+
+  Future<void> _openFile() async {
+    try {
+      final result = await _workspace.pickFile();
+      if (mounted && !result.ok) setState(() => _hudError = result.message);
+    } catch (_) {
+      if (mounted) setState(() => _hudError = 'That file could not be opened. Please try another file.');
+    }
+  }
+
+  Future<void> _openWeb() async {
+    final input = TextEditingController();
+    final value = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Open a web source'),
+      content: TextField(controller: input, keyboardType: TextInputType.url,
+        autofocus: true, decoration: const InputDecoration(labelText: 'HTTPS address', hintText: 'https://…'),
+        onSubmitted: (value) => Navigator.pop(context, value)),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(context, input.text), child: const Text('Open'))],
+    ));
+    // Wait until the dialog transition releases its text field before disposal.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    input.dispose();
+    if (!mounted || value == null) return;
+    final uri = Uri.tryParse(value.trim());
+    if (uri == null || uri.scheme != 'https' || uri.host.isEmpty || uri.userInfo.isNotEmpty) {
+      setState(() => _hudError = 'Enter a full HTTPS address without a username or password.');
+      return;
+    }
+    _workspace.openWeb(uri);
+  }
+
 
   bool _assistantAvailable = false;
   bool _assistantHeld = false;
@@ -54,6 +91,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _workspace.addListener(_workspaceChanged);
     _subscribeToVoice();
     _refreshAssistantState();
     _loadPulse();
@@ -66,6 +104,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _workspace.removeListener(_workspaceChanged);
+    _workspace.closeAll();
     _voiceSubscription?.cancel();
     _listenRestart?.cancel();
     _pulseTimer?.cancel();
@@ -288,6 +328,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _handleUtterance(String text) async {
+    final workspaceRequest = text.trim().toLowerCase().replaceAll(RegExp(r'[.!?]+$'), '');
+    if (workspaceRequest == 'open file' || workspaceRequest == 'open a file') {
+      await _stopListening();
+      await _openFile();
+      _scheduleListen(const Duration(milliseconds: 500));
+      return;
+    }
+    if (workspaceRequest == 'show system report' && _report != null) {
+      _workspace.openReport('System report', _report!);
+      _scheduleListen(const Duration(milliseconds: 350));
+      return;
+    }
+    if (_workspace.isOpen && const {'next tab', 'previous tab', 'close current tab', 'close workspace'}.contains(workspaceRequest)) {
+      switch (workspaceRequest) {
+        case 'next tab': _workspace.nextTab();
+        case 'previous tab': _workspace.previousTab();
+        case 'close current tab': _workspace.closeActive();
+        case 'close workspace': _workspace.closeAll();
+      }
+      _scheduleListen(const Duration(milliseconds: 350));
+      return;
+    }
+
     if (_pendingAction != null && _isApprovalIntent(text)) {
       await _approvePending();
       return;
@@ -461,17 +524,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     onSignOut: widget.onSignOut,
                   ),
                   Expanded(
-                    child: Center(
-                      child: _VoiceCore(
-                        state: _voiceState,
-                        level: _voiceLevel,
-                        listening: _listening,
-                        speaking: _speaking,
-                        thinking: _chatBusy || _approvalBusy,
-                        onTap: _toggleVoice,
+                    child: Column(children: [
+                      Flexible(
+                        flex: _workspace.isOpen ? 1 : 3,
+                        child: Center(child: FittedBox(fit: BoxFit.scaleDown,
+                          child: _VoiceCore(
+                            state: _voiceState, level: _voiceLevel,
+                            listening: _listening, speaking: _speaking,
+                            thinking: _chatBusy || _approvalBusy, onTap: _toggleVoice,
+                          ),
+                        )),
                       ),
-                    ),
+                      if (_workspace.isOpen)
+                        Expanded(flex: 3, child: WorkspacePanel(controller: _workspace)),
+                    ]),
                   ),
+                  Wrap(alignment: WrapAlignment.center, spacing: 4, children: [
+                    TextButton.icon(onPressed: _openFile, icon: const Icon(Icons.folder_open_outlined), label: const Text('File')),
+                    TextButton.icon(onPressed: _openWeb, icon: const Icon(Icons.public), label: const Text('Web')),
+                    TextButton.icon(onPressed: _report == null ? null : () => _workspace.openReport('System report', _report!),
+                      icon: const Icon(Icons.analytics_outlined), label: const Text('Report')),
+                    if (_workspace.isOpen) IconButton(tooltip: 'Close workspace', onPressed: _workspace.closeAll,
+                      icon: const Icon(Icons.close_fullscreen)),
+                  ]),
                   if (!_checkingAssistant && _assistantAvailable && !_assistantHeld)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),

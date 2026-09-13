@@ -31,7 +31,7 @@ class WorkspaceOverlayHost extends StatelessWidget {
               right: 8,
               bottom: 8,
               height: height * 0.58,
-              child: _WorkspacePanel(controller: controller),
+              child: WorkspacePanel(controller: controller),
             );
           },
         ),
@@ -40,8 +40,8 @@ class WorkspaceOverlayHost extends StatelessWidget {
   }
 }
 
-class _WorkspacePanel extends StatelessWidget {
-  const _WorkspacePanel({required this.controller});
+class WorkspacePanel extends StatelessWidget {
+  const WorkspacePanel({super.key, required this.controller});
 
   final WorkspaceController controller;
 
