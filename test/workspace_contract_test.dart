@@ -30,6 +30,11 @@ void main() {
     expect(controller, contains('PdfTextExtractor.extract'));
     expect(controller, contains("WorkspaceKind.pdf => 'local_pdf_text'"));
     expect(controller, contains("'local_source_file'"));
+    expect(controller, contains("kind: 'local_image'"));
+    expect(controller, contains('_maxVisionImageBytes = 4 * 1024 * 1024'));
+    expect(controller, contains('base64Encode(bytes)'));
+    expect(controller, contains('unless you explicitly ask me to analyze this image'));
+    expect(controller, contains("context!.kind == 'local_image'"));
     expect(controller, contains('_redactSensitiveText'));
     expect(controller, contains('[private key redacted by Next]'));
     expect(controller, contains('local private preview'));
@@ -52,6 +57,8 @@ void main() {
     expect(api, contains("tool: 'workspace_report'"));
     expect(api, contains("tool: 'workspace_news'"));
     expect(api, contains("tool: 'workspace_web_search'"));
+    expect(api, contains("'workspace_context':"));
+    expect(api, contains("'text': workspaceContext.text"));
     expect(api, contains('news.google.com'));
   });
 
