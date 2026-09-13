@@ -75,6 +75,29 @@ void main() {
     expect(controller.comparisonAnalysisContext(), isNull);
   });
 
+  test('analysis redacts credentials while preserving local source text', () {
+    const raw = '''
+api_key = live-secret-value
+Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature
+-----BEGIN PRIVATE KEY-----
+very-private-material
+-----END PRIVATE KEY-----
+normal_setting = visible
+''';
+    controller.openText(title: 'config.txt', text: raw);
+
+    expect(controller.visibleItems.single.text, contains('live-secret-value'));
+    expect(controller.visibleItems.single.text, contains('very-private-material'));
+
+    final context = controller.activeAnalysisContext()!;
+    expect(context.text, contains('[redacted by Next]'));
+    expect(context.text, contains('[private key redacted by Next]'));
+    expect(context.text, contains('normal_setting = visible'));
+    expect(context.text, isNot(contains('live-secret-value')));
+    expect(context.text, isNot(contains('very-private-material')));
+    expect(context.text, isNot(contains('eyJhbGciOiJIUzI1NiJ9.payload.signature')));
+  });
+
   test('rejects credential-bearing web addresses', () {
     expect(() => controller.openWeb(Uri.parse('https://owner:secret@example.com')),
       throwsArgumentError);
