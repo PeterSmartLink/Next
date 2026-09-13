@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
@@ -40,10 +40,24 @@ jobs:
       - name: Build Android debug APK
         run: flutter build apk --debug
 
-      - name: Keep installable debug APK
+      - name: Verify APK output
+        run: |
+          set -euo pipefail
+          test -s build/app/outputs/flutter-apk/app-debug.apk
+          sha256sum build/app/outputs/flutter-apk/app-debug.apk
+          du -h build/app/outputs/flutter-apk/app-debug.apk
+
+      # GitHub Actions artifact storage is intentionally best-effort. Normal
+      # pushes validate/build without consuming artifact quota. A manual run can
+      # temporarily expose the APK while the canonical private delivery path is
+      # moved to OTYA/R2.
+      - name: Keep installable debug APK for manual runs
+        if: github.event_name == 'workflow_dispatch'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: next-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
+          compression-level: 0
