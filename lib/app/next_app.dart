@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../features/auth/owner_gate.dart';
+import '../features/workspace/workspace_overlay.dart';
 
 class NextApp extends ConsumerWidget {
   const NextApp({super.key});
@@ -14,6 +15,9 @@ class NextApp extends ConsumerWidget {
       themeMode: ThemeMode.system,
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),
+      builder: (context, child) => WorkspaceOverlayHost(
+        child: child ?? const SizedBox.shrink(),
+      ),
       home: const OwnerGate(),
     );
   }
