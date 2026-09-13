@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import '../../features/workspace/workspace_controller.dart';
 import '../auth/owner_auth_service.dart';
 import '../platform/next_platform_bridge.dart';
 
@@ -253,6 +254,122 @@ class NextOwnerApi {
     String? conversationId,
   }) async {
     final normalized = _normalizeCommand(message);
+    final workspace = WorkspaceController.instance;
+
+    if (RegExp(r'^(?:please )?(?:open|choose|pick|browse) (?:a )?file$|^open files$').hasMatch(normalized)) {
+      final result = await workspace.pickFile();
+      return NextChatReply(
+        answer: result.message,
+        conversationId: conversationId,
+        tool: 'workspace_file',
+      );
+    }
+
+    if (RegExp(r'^(?:close|hide) (?:the )?(?:workspace|browser|file|document|report)$').hasMatch(normalized)) {
+      workspace.closeActive();
+      return NextChatReply(
+        answer: 'Closed the current workspace panel.',
+        conversationId: conversationId,
+        tool: 'workspace_close',
+      );
+    }
+
+    if (RegExp(r'^(?:close|clear) all (?:workspace|workspace tabs|tabs|documents)$').hasMatch(normalized)) {
+      workspace.closeAll();
+      return NextChatReply(
+        answer: 'Cleared the workspace.',
+        conversationId: conversationId,
+        tool: 'workspace_close_all',
+      );
+    }
+
+    if (RegExp(r'^(?:next|switch to next) (?:workspace )?tab$').hasMatch(normalized)) {
+      workspace.nextTab();
+      return NextChatReply(
+        answer: 'Switched to the next workspace tab.',
+        conversationId: conversationId,
+        tool: 'workspace_tab',
+      );
+    }
+
+    if (RegExp(r'^(?:previous|switch to previous) (?:workspace )?tab$').hasMatch(normalized)) {
+      workspace.previousTab();
+      return NextChatReply(
+        answer: 'Switched to the previous workspace tab.',
+        conversationId: conversationId,
+        tool: 'workspace_tab',
+      );
+    }
+
+    if (RegExp(
+      r'^(?:show|open) (?:the )?(?:system|company|operational|full) report$',
+    ).hasMatch(normalized)) {
+      final operational = await report();
+      workspace.openReport('OTYA operational report', operational);
+      return NextChatReply(
+        answer: 'I opened the live OTYA operational report on this screen.',
+        conversationId: conversationId,
+        tool: 'workspace_report',
+      );
+    }
+
+    final newsMatch = RegExp(
+      r'^(?:show|open|find|search) (?:the )?(?:latest )?news (?:about|on|for) (.+)$|^(?:latest )?news (?:about|on) (.+)$',
+    ).firstMatch(normalized);
+    if (newsMatch != null) {
+      final query = (newsMatch.group(1) ?? newsMatch.group(2) ?? '').trim();
+      if (query.isNotEmpty) {
+        final uri = Uri.https('news.google.com', '/search', {'q': query});
+        workspace.openWeb(uri, title: 'News · $query');
+        return NextChatReply(
+          answer: 'I opened live news about $query in the workspace.',
+          conversationId: conversationId,
+          tool: 'workspace_news',
+        );
+      }
+    }
+
+    final webSearchMatch = RegExp(
+      r'^(?:search|look up|find) (?:the )?(?:web|internet) (?:for )?(.+)$|^web search (.+)$',
+    ).firstMatch(normalized);
+    if (webSearchMatch != null) {
+      final query = (webSearchMatch.group(1) ?? webSearchMatch.group(2) ?? '').trim();
+      if (query.isNotEmpty) {
+        final uri = Uri.https('www.google.com', '/search', {'q': query});
+        workspace.openWeb(uri, title: 'Web · $query');
+        return NextChatReply(
+          answer: 'I opened web results for $query on this screen.',
+          conversationId: conversationId,
+          tool: 'workspace_web_search',
+        );
+      }
+    }
+
+    if (RegExp(r'^(?:please )?open (?:the )?(?:web )?browser$').hasMatch(normalized)) {
+      workspace.openWeb(Uri.parse('https://www.google.com/'), title: 'Web');
+      return NextChatReply(
+        answer: 'Browser opened inside Next.',
+        conversationId: conversationId,
+        tool: 'workspace_browser',
+      );
+    }
+
+    final websiteMatch = RegExp(r'^(?:open|show) (?:website|site) (.+)$').firstMatch(normalized);
+    if (websiteMatch != null) {
+      var raw = websiteMatch.group(1)?.trim() ?? '';
+      if (raw.isNotEmpty) {
+        if (!raw.startsWith('http://') && !raw.startsWith('https://')) raw = 'https://$raw';
+        final uri = Uri.tryParse(raw);
+        if (uri != null && uri.host.isNotEmpty && (uri.scheme == 'https' || uri.scheme == 'http')) {
+          workspace.openWeb(uri, title: uri.host);
+          return NextChatReply(
+            answer: 'Opened ${uri.host} inside Next.',
+            conversationId: conversationId,
+            tool: 'workspace_browser',
+          );
+        }
+      }
+    }
 
     final openMatch = RegExp(r'^(?:please )?open (.+?)(?: app)?$').firstMatch(normalized);
     if (openMatch != null) {
