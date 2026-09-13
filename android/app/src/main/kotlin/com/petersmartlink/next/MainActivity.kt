@@ -95,6 +95,14 @@ class MainActivity : FlutterFragmentActivity() {
                             openUrl(url, result)
                         }
                     }
+                    "openSystemPanel" -> {
+                        val panel = call.argument<String>("panel")
+                        if (panel.isNullOrBlank()) {
+                            result.error("bad_request", "panel is required", null)
+                        } else {
+                            openSystemPanel(panel, result)
+                        }
+                    }
                     "deviceSnapshot" -> result.success(deviceSnapshot())
                     else -> result.notImplemented()
                 }
@@ -368,6 +376,40 @@ class MainActivity : FlutterFragmentActivity() {
                 if (isTelegramOwnerLink) "Install Telegram to finish trusted-phone enrollment." else "No app can open this link.",
                 null,
             )
+            return
+        }
+        startActivity(intent)
+        result.success(null)
+    }
+
+    private fun openSystemPanel(panel: String, result: MethodChannel.Result) {
+        val intent = when (panel.lowercase()) {
+            "internet" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
+            } else {
+                Intent(Settings.ACTION_WIRELESS_SETTINGS)
+            }
+            "wifi" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Intent(Settings.Panel.ACTION_WIFI)
+            } else {
+                Intent(Settings.ACTION_WIFI_SETTINGS)
+            }
+            "bluetooth" -> Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+            "notifications" -> Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            }
+            "app" -> Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:$packageName"),
+            )
+            else -> {
+                result.error("blocked_panel", "That Android settings panel is not allowed from Next.", null)
+                return
+            }
+        }
+
+        if (intent.resolveActivity(packageManager) == null) {
+            result.error("not_found", "Android could not open that settings panel.", null)
             return
         }
         startActivity(intent)
