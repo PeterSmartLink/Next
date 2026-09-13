@@ -59,6 +59,10 @@ void main() {
     expect(api, contains("tool: 'workspace_web_search'"));
     expect(api, contains("'workspace_context':"));
     expect(api, contains("'text': workspaceContext.text"));
+    expect(api, contains('this image'));
+    expect(api, contains('this photo'));
+    expect(api, contains('this picture'));
+    expect(api, contains('this screenshot'));
     expect(api, contains('news.google.com'));
   });
 
