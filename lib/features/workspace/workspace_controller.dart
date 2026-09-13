@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 
 import 'office_text_extractor.dart';
+import 'pdf_text_extractor.dart';
 
 enum WorkspaceKind { web, pdf, image, text, report, unsupported }
 
@@ -163,16 +164,32 @@ class WorkspaceController extends ChangeNotifier {
       if (path == null || path.isEmpty) {
         return const WorkspaceOpenResult(false, 'Android could not provide a local PDF path for this file.');
       }
+      PdfTextExtraction? extraction;
+      try {
+        extraction = await PdfTextExtractor.extract(path);
+      } catch (_) {
+        // Rendering remains useful even when the PDF is encrypted, malformed,
+        // scanned, or otherwise has no safely extractable text.
+      }
+      if (session != _session) return const WorkspaceOpenResult(false, 'The owner session ended.');
       _add(
         WorkspaceItem(
           id: _id('pdf'),
           kind: WorkspaceKind.pdf,
           title: picked.name,
           path: path,
-          subtitle: _sizeLabel(length),
+          text: extraction?.text,
+          subtitle: extraction == null
+              ? '${_sizeLabel(length)} · PDF · visual preview'
+              : '${_sizeLabel(length)} · PDF · ${extraction.pagesRead}/${extraction.totalPages} pages inspected locally',
         ),
       );
-      return WorkspaceOpenResult(true, 'Opened ${picked.name} in the Next workspace.');
+      return WorkspaceOpenResult(
+        true,
+        extraction == null
+            ? 'Opened ${picked.name}. I can display it, but it has no readable embedded text for analysis.'
+            : 'Opened ${picked.name} privately. Its embedded text is ready for analysis on this phone.',
+      );
     }
 
     if (const {'png', 'jpg', 'jpeg', 'webp'}.contains(extension)) {
@@ -292,11 +309,18 @@ class WorkspaceController extends ChangeNotifier {
 
   WorkspaceAnalysisContext? _analysisContext(WorkspaceItem item) {
     if (item.kind == WorkspaceKind.web) return _webContexts[item.id];
-    if (item.kind == WorkspaceKind.text || item.kind == WorkspaceKind.report) {
+    if (item.kind == WorkspaceKind.text ||
+        item.kind == WorkspaceKind.report ||
+        item.kind == WorkspaceKind.pdf) {
       final value = item.text?.trim() ?? '';
       if (value.isEmpty) return null;
+      final kind = switch (item.kind) {
+        WorkspaceKind.report => 'otya_report',
+        WorkspaceKind.pdf => 'local_pdf_text',
+        _ => 'local_text_file',
+      };
       return WorkspaceAnalysisContext(
-        kind: item.kind == WorkspaceKind.report ? 'otya_report' : 'local_text_file',
+        kind: kind,
         title: item.title,
         source: item.subtitle ?? item.title,
         text: _clip(value),
