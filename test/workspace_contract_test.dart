@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('workspace supports same-screen web, PDF, image, text, report and private Office surfaces', () {
+  test('workspace supports same-screen web, PDF, image, text, report, source and private Office surfaces', () {
     final overlay = File('lib/features/workspace/workspace_overlay.dart').readAsStringSync();
     final controller = File('lib/features/workspace/workspace_controller.dart').readAsStringSync();
     final office = File('lib/features/workspace/office_text_extractor.dart').readAsStringSync();
@@ -19,9 +19,19 @@ void main() {
     expect(controller, contains("'docx'"));
     expect(controller, contains("'xlsx'"));
     expect(controller, contains("'pptx'"));
+    expect(controller, contains("'dart'"));
+    expect(controller, contains("'kt'"));
+    expect(controller, contains("'ts'"));
+    expect(controller, contains("'py'"));
+    expect(controller, contains("'sql'"));
+    expect(controller, contains("'toml'"));
+    expect(controller, contains("'properties'"));
     expect(controller, contains('OfficeTextExtractor.extract'));
     expect(controller, contains('PdfTextExtractor.extract'));
     expect(controller, contains("WorkspaceKind.pdf => 'local_pdf_text'"));
+    expect(controller, contains("'local_source_file'"));
+    expect(controller, contains('_redactSensitiveText'));
+    expect(controller, contains('[private key redacted by Next]'));
     expect(controller, contains('local private preview'));
     expect(controller, contains('Nothing was uploaded to a document viewer'));
     expect(controller, isNot(contains('docs.google.com')));
