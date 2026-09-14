@@ -77,6 +77,6 @@ Never commit:
 
 ## Migration rule
 
-Existing AI/admin capabilities are not copied into the client. Their browser UI moves into Next, while privileged execution stays behind authenticated server APIs. Browser admin surfaces remain only as a temporary recovery path until mobile feature parity is tested.
+Existing AI/admin capabilities are not copied into the client. Their browser UI is retired; Next is the sole owner experience. Privileged execution remains behind authenticated server APIs, with short-lived owner authorization, biometric step-up and explicit approval for high-impact actions.
 
 See `docs/ARCHITECTURE.md` and `docs/MIGRATION_MAP.md`.
