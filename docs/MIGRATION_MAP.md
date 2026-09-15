@@ -188,20 +188,21 @@ These are capabilities of the same Next identity, not separate bots:
 
 Wake phrase audio should be processed locally until activation whenever feasible.
 
-## Browser retirement
+## Owner-browser boundary
 
-The target is no ordinary owner operations in a browser. However, browser capability is not removed before Next has passed:
+Ordinary owner operations are retired from the browser. **Next is the sole owner experience** for conversations, reports, approvals, support and protected operations.
 
-- owner sign-in + MFA
-- recovery path
-- all read-only parity
-- all required write approvals
-- support/release/incident parity
-- audit parity
+The server continues to enforce role checks, fresh owner authorization and approval policy independently of any app screen. No secret or infrastructure credential enters the APK.
+
+The remaining device acceptance checklist is:
+
+- owner sign-in + MFA and recovery
+- read-only reports, support, release and incident access
+- approval and biometric step-up flows
 - notification and voice fallbacks
-- emergency access test
+- an emergency access test with an expired or unavailable owner session
 
-Once those checks pass, the web Command Center can become recovery-only and later be deliberately retired. This prevents locking the owner out during migration.
+A test that fails keeps the operation unavailable; it does not restore a browser owner console.
 
 ## Immediate implementation order
 
