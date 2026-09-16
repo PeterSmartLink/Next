@@ -44,6 +44,28 @@ jobs:
             test -n "$value"
           done
 
+      - name: Validate private signing material
+        env:
+          NEXT_KEYSTORE_BASE64: ${{ secrets.NEXT_KEYSTORE_BASE64 }}
+          NEXT_KEY_ALIAS: ${{ secrets.NEXT_KEY_ALIAS }}
+          NEXT_STORE_PASSWORD: ${{ secrets.NEXT_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keystore=android/app/next-owner-release.check.jks
+          trap 'rm -f "$keystore"' EXIT
+          if ! printf '%s' "$NEXT_KEYSTORE_BASE64" | base64 --decode > "$keystore"; then
+            echo "::error::NEXT_KEYSTORE_BASE64 is not valid Base64. Use the complete Base64 content of the .jks file exactly, including any ending = characters."
+            exit 1
+          fi
+          if ! test -s "$keystore"; then
+            echo "::error::NEXT_KEYSTORE_BASE64 decoded to an empty file."
+            exit 1
+          fi
+          if ! keytool -list -keystore "$keystore" -storepass "$NEXT_STORE_PASSWORD" -alias "$NEXT_KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error::The Next keystore, alias, or store password does not match. Check NEXT_KEYSTORE_BASE64, NEXT_KEY_ALIAS, and NEXT_STORE_PASSWORD."
+            exit 1
+          fi
+
       - name: Prepare ephemeral signing files
         env:
           NEXT_KEYSTORE_BASE64: ${{ secrets.NEXT_KEYSTORE_BASE64 }}
