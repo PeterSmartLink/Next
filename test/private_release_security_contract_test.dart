@@ -18,6 +18,9 @@ void main() {
 
     expect(workflow, contains('workflow_dispatch:'));
     expect(workflow, contains('NEXT_KEYSTORE_BASE64'));
+    expect(workflow, contains('Validate private signing material'));
+    expect(workflow, contains('including any ending = characters'));
+    expect(workflow, contains('keytool -list'));
     expect(workflow, contains('apksigner'));
     expect(workflow, contains('Remove signing material'));
 
